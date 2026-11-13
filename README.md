@@ -274,7 +274,7 @@ SRS 的 `http_hooks` 会在推流上线/下线时回调 `/hooks/on_publish`、`/
 
 ### 方式一：通过捷兔桌面（推荐，零配置）
 
-`jdconfig` 已声明 `agent.tools[]`（8 个工具）。捷兔桌面把这些工具以 `<服务slug>__<name>`
+`jdconfig` 已声明 `agent.tools[]`（10 个工具）。捷兔桌面把这些工具以 `<服务slug>__<name>`
 暴露给它托管的 MCP，本机 AI 客户端（Cursor / Claude Desktop / Cline）连桌面即可用，
 不用你填任何地址。
 

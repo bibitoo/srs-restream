@@ -5,7 +5,7 @@
   "workDir": "jetstream",
   "endpointPort": 1986,
   "localEndpointPort": 1986,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "基于 SRS 的推流服务器：接收 RTMP 推流，支持转推第三方平台、多路混流（宫格/画中画/圆窗口）、自动录制与录像回放。",
   "applicationIds": [
     "jetool-trail"
@@ -147,6 +147,69 @@
         "name": "job_stop",
         "path": "/api/agent/job/stop",
         "title": "停止转推任务"
+      },
+      {
+        "description": "一次拿到当前全局状态：有哪些直播流（是否在推、是否在录）、有哪些转推任务及其推送状态、录像总览。适合作为「现在什么情况」的第一句提问，避免多次调用。",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "stream_overview",
+        "path": "/api/agent/overview",
+        "title": "全局概览"
+      },
+      {
+        "description": "一步完成「多路合流 + 推到第三方平台」：创建混流任务并立即启动。例如「把 camera01 和 camera02 做成上下分屏推到 B 站」。layout 不填默认圆窗口(circle)。创建后可用 jobs_list 看状态，用 job_stop 停止。",
+        "inputSchema": {
+          "properties": {
+            "fps": {
+              "description": "帧率，默认 25",
+              "type": "integer"
+            },
+            "height": {
+              "description": "输出高，默认 720",
+              "type": "integer"
+            },
+            "layout": {
+              "description": "布局：vstack(上下)/hstack(左右)/grid(宫格)/pip(画中画)/circle(圆窗口，默认)",
+              "type": "string"
+            },
+            "name": {
+              "description": "任务名，不填自动生成",
+              "type": "string"
+            },
+            "sources": {
+              "description": "要合成的源流，例如 live/camera01 与 live/camera02",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "targets": {
+              "description": "第三方 RTMP 推流地址数组",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "width": {
+              "description": "输出宽，默认 1280",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sources",
+            "targets"
+          ],
+          "type": "object"
+        },
+        "method": "POST",
+        "mutating": true,
+        "name": "mix_and_push",
+        "path": "/api/agent/mix_and_push",
+        "timeoutSeconds": 60,
+        "title": "多路混流并推送"
       },
       {
         "description": "列出录像文件：流名、时长、大小、是否正在录制、是否需要修复。",

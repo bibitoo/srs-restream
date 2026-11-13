@@ -165,6 +165,148 @@ func agentTools() []*agentTool {
 			},
 		},
 		{
+			Name: "stream_overview", Title: "全局概览",
+			Description: "一次拿到当前全局状态：有哪些直播流（是否在推、是否在录）、有哪些转推任务及其推送状态、录像总览。" +
+				"适合作为「现在什么情况」的第一句提问，避免多次调用。",
+			Method: "GET", Path: "/api/agent/overview", InputSchema: obj(nil),
+			Run: func(a *API, _ map[string]interface{}) (interface{}, error) {
+				// 流
+				streams := []map[string]interface{}{}
+				if list, err := a.srs.ListStreams(a.store.Settings().PublicBase); err == nil {
+					recs := a.rec.ActiveByStream()
+					for _, s := range list {
+						item := map[string]interface{}{
+							"key": s.Key, "active": s.Active, "video": s.Video, "kbps": s.KbpsRecv,
+						}
+						if r, ok := recs[s.Key]; ok {
+							item["recording_seconds"] = int(r.Duration)
+						}
+						streams = append(streams, item)
+					}
+				}
+				// 任务
+				jobs := []map[string]interface{}{}
+				running := 0
+				for _, j := range a.store.Jobs() {
+					rt := a.runner.Runtime(j.ID)
+					if rt.Status == StatusRunning {
+						running++
+					}
+					okTargets := 0
+					for _, t := range rt.Targets {
+						if t.Status == StatusRunning {
+							okTargets++
+						}
+					}
+					jobs = append(jobs, map[string]interface{}{
+						"id": j.ID, "name": j.Name, "mode": j.Mode, "layout": j.Layout,
+						"sources": j.Sources, "status": rt.Status, "detail": rt.Detail,
+						"targets_total": len(rt.Targets), "targets_running": okTargets,
+					})
+				}
+				// 录像
+				all := a.rec.List()
+				activeRec := 0
+				var totalSize int64
+				for _, r := range all {
+					totalSize += r.Size
+					if r.Active {
+						activeRec++
+					}
+				}
+				recent := []map[string]interface{}{}
+				for i, r := range all {
+					if i >= 5 {
+						break
+					}
+					recent = append(recent, map[string]interface{}{
+						"stream": r.Stream, "file": r.File,
+						"duration": int(r.Duration), "size": r.Size,
+						"active": r.Active, "needs_repair": r.NeedsRepair,
+					})
+				}
+				return map[string]interface{}{
+					"streams": map[string]interface{}{"count": len(streams), "items": streams},
+					"jobs": map[string]interface{}{
+						"count": len(jobs), "running": running, "items": jobs,
+					},
+					"recordings": map[string]interface{}{
+						"count": len(all), "active": activeRec,
+						"total_size_bytes": totalSize, "recent": recent,
+					},
+				}, nil
+			},
+		},
+		{
+			Name: "mix_and_push", Title: "多路混流并推送",
+			Description: "一步完成「多路合流 + 推到第三方平台」：创建混流任务并立即启动。" +
+				"例如「把 camera01 和 camera02 做成上下分屏推到 B 站」。layout 不填默认圆窗口(circle)。" +
+				"创建后可用 jobs_list 看状态，用 job_stop 停止。",
+			Method: "POST", Path: "/api/agent/mix_and_push", Mutating: true, TimeoutSeconds: 60,
+			InputSchema: obj(map[string]interface{}{
+				"name":    str("任务名，不填自动生成"),
+				"sources": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "要合成的源流，例如 live/camera01 与 live/camera02"},
+				"targets": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "第三方 RTMP 推流地址数组"},
+				"layout":  str("布局：vstack(上下)/hstack(左右)/grid(宫格)/pip(画中画)/circle(圆窗口，默认)"),
+				"width":   map[string]interface{}{"type": "integer", "description": "输出宽，默认 1280"},
+				"height":  map[string]interface{}{"type": "integer", "description": "输出高，默认 720"},
+				"fps":     map[string]interface{}{"type": "integer", "description": "帧率，默认 25"},
+			}, "sources", "targets"),
+			Run: func(a *API, args map[string]interface{}) (interface{}, error) {
+				var srcs, tgs []string
+				if v, ok := args["sources"].([]interface{}); ok {
+					for _, x := range v {
+						if s, ok := x.(string); ok && strings.TrimSpace(s) != "" {
+							srcs = append(srcs, strings.TrimSpace(s))
+						}
+					}
+				}
+				if v, ok := args["targets"].([]interface{}); ok {
+					for _, x := range v {
+						if s, ok := x.(string); ok && strings.TrimSpace(s) != "" {
+							tgs = append(tgs, strings.TrimSpace(s))
+						}
+					}
+				}
+				if len(srcs) < 2 {
+					return nil, errors.New("sources 至少需要 2 路流；只有 1 路请用 job_create(mode=direct)")
+				}
+				if len(tgs) == 0 {
+					return nil, errors.New("targets 不能为空，需给出至少一个第三方 RTMP 推流地址")
+				}
+				in := Job{
+					Name:      orEmpty(strings.TrimSpace(strOf(args["name"])), "混流任务"),
+					Mode:      "mix",
+					Sources:   srcs,
+					Layout:    orEmpty(strings.TrimSpace(strOf(args["layout"])), "circle"),
+					ExtraURLs: tgs,
+					Width:     intOf(args["width"], 1280),
+					Height:    intOf(args["height"], 720),
+					FPS:       intOf(args["fps"], 25),
+					Enabled:   true,
+					AudioMode: "mix",
+				}
+				if err := a.validateJob(&in); err != nil {
+					return nil, err
+				}
+				if err := a.checkSelfLoop(&in); err != nil {
+					return nil, err
+				}
+				j, err := a.store.AddJob(in)
+				if err != nil {
+					return nil, err
+				}
+				_, _ = a.runner.Start(j.ID)
+				rt := a.runner.Runtime(j.ID)
+				return map[string]interface{}{
+					"id": j.ID, "name": j.Name, "layout": j.Layout,
+					"status": rt.Status, "detail": rt.Detail,
+					"sources": srcs, "targets": tgs,
+					"hint": "任务已创建并启动；源流不在线时会自动等源流上线。用 jobs_list 查看状态。",
+				}, nil
+			},
+		},
+		{
 			Name: "recordings_list", Title: "列出录像",
 			Description: "列出录像文件：流名、时长、大小、是否正在录制、是否需要修复。",
 			Method:      "GET", Path: "/api/agent/recordings", InputSchema: obj(nil),
@@ -213,6 +355,28 @@ func agentTools() []*agentTool {
 			},
 		},
 	}
+}
+
+func strOf(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func intOf(v interface{}, def int) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case string:
+		var x int
+		if _, err := fmt.Sscanf(n, "%d", &x); err == nil {
+			return x
+		}
+	}
+	return def
 }
 
 func agentToolByName(name string) *agentTool {

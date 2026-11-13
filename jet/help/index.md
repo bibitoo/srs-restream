@@ -159,11 +159,13 @@ rtmp://live-push.bilivideo.com/live-bvc/xxxxx?key=yyyyy
 - 「现在有哪些直播流？」→ 调 `streams_list`
 - 「把 camera01 推到 B 站」→ 调 `job_create` + `job_start`
 - 「刚才那段录下来了吗？」→ 调 `recordings_list`
+- 「两路做成圆窗口推到 B 站」→ 调 `mix_and_push` 一步到位
+- 「现在什么情况？」→ 调 `stream_overview` 一次看全
 
 配置方式（Cursor → 设置 → MCP）：把地址填 `http://<本机IP>:1986/mcp`，
 认证头写 `Authorization: Bearer 你的访问密钥`。
 
-如果你装了捷兔桌面，正常情况下**不用配**——装好本软件后，桌面会自动把 8 个工具
+如果你装了捷兔桌面，正常情况下**不用配**——装好本软件后，桌面会自动把 10 个工具
 提供给 AI 客户端（形如 `jetsream__streams_list`）。
 
 写操作（创建任务、启停、录制）建议让 AI 先跟你确认再执行。
