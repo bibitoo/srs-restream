@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SRS 转推控制台</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --line:#e3e6ea; --text:#1f2430; --muted:#6b7280;
+    --accent:#2563eb; --accent-2:#1d4ed8; --ok:#0f9d58; --warn:#c77700; --err:#d93025;
+    --shadow:0 1px 2px rgba(16,24,40,.06),0 4px 12px rgba(16,24,40,.04);
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:14px 22px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+  .brand{font-weight:600;font-size:16px;display:flex;align-items:center;gap:8px}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(15,157,88,.15)}
+  .brand .dot.off{background:var(--err);box-shadow:0 0 0 3px rgba(217,48,37,.15)}
+  .ver{font-weight:400;color:var(--muted);font-size:12px}
+  .stats{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap}
+  .stat{display:flex;flex-direction:column;align-items:flex-start;min-width:64px}
+  .stat b{font-size:17px;line-height:1.2}
+  .stat span{font-size:11px;color:var(--muted)}
+  .tabs{display:flex;gap:4px;padding:0 18px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:57px;z-index:19}
+  .tabs button{border:0;background:none;padding:12px 14px;font-size:14px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
+  .tabs button.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  main{padding:20px;max-width:1400px;margin:0 auto}
+  .panel{display:none}
+  .panel.active{display:block}
+  .toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .toolbar h2{margin:0;font-size:15px;font-weight:600}
+  .spacer{flex:1}
+  button.btn{background:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 13px;cursor:pointer;font-size:13px;color:var(--text);transition:.15s}
+  button.btn:hover{border-color:#c9cfd8;background:#fafbfc}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover{background:var(--accent-2);border-color:var(--accent-2)}
+  button.danger{color:var(--err);border-color:#f2c6c2}
+  button.danger:hover{background:#fdf3f2}
+  button.sm{padding:4px 9px;font-size:12px;border-radius:6px}
+  table{width:100%;border-collapse:separate;border-spacing:0;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:middle;font-size:13px}
+  th{background:#fafbfc;color:var(--muted);font-weight:500;font-size:12px;letter-spacing:.02em}
+  tr:last-child td{border-bottom:0}
+  .badge{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:99px;font-size:12px;background:#eef1f5;color:var(--muted)}
+  .badge.ok{background:#e8f6ee;color:#0b7a43}.badge.run{background:#e8f0fe;color:#1a56db}
+  .badge.warn{background:#fdf3e2;color:#a4670a}.badge.err{background:#fdeceb;color:#b3261e}
+  .badge.off{background:#eef1f5;color:#6b7280}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+  .muted{color:var(--muted)}
+  .empty{padding:40px;text-align:center;color:var(--muted);background:var(--card);border:1px dashed var(--line);border-radius:var(--radius)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px}
+  .card h3{margin:0 0 4px;font-size:14px;font-weight:600;display:flex;gap:8px;align-items:center}
+  .card .rows{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:10px 0;font-size:12px}
+  .card .rows .k{color:var(--muted)}
+  .thumb{width:100%;aspect-ratio:16/9;background:#000;border-radius:8px;object-fit:contain;display:block}
+  .modal-mask{position:fixed;inset:0;background:rgba(16,24,40,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;z-index:50;overflow:auto}
+  .modal{background:#fff;border-radius:12px;width:100%;max-width:720px;box-shadow:0 20px 50px rgba(16,24,40,.2)}
+  .modal.wide{max-width:980px}
+  .modal header{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;position:static}
+  .modal header h3{margin:0;font-size:15px}
+  .modal .body{padding:18px 20px;max-height:72vh;overflow:auto}
+  .modal .foot{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end;position:sticky;bottom:0;background:#fff}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+  input[type=text],input[type=number],select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:#fff;color:var(--text)}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  .check{display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 0}
+  .check input{width:15px;height:15px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:99px;padding:5px 11px;font-size:12px;cursor:pointer;background:#fff;user-select:none}
+  .chip.on{border-color:var(--accent);background:#eef4ff;color:var(--accent)}
+  .hint{font-size:12px;color:var(--muted);margin-top:4px}
+  pre.log{background:#0f1524;color:#d7e0f0;padding:12px;border-radius:8px;font-size:12px;line-height:1.5;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1f2430;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:99;opacity:0;transition:.25s;pointer-events:none}
+  .toast.show{opacity:1}
+  .toast.err{background:var(--err)}
+  .url{margin-top:8px;font-size:11px;color:var(--muted);word-break:break-all}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .layout-pick{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+  .layout-pick .lp{border:1px solid var(--line);border-radius:8px;padding:8px 6px;text-align:center;cursor:pointer;font-size:12px;background:#fff}
+  .layout-pick .lp.on{border-color:var(--accent);background:#eef4ff;color:var(--accent);font-weight:600}
+  .layout-pick .lp svg{display:block;margin:0 auto 4px}
+  @media (max-width:720px){.row2,.row3{grid-template-columns:1fr}.layout-pick{grid-template-columns:repeat(3,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot" id="dot"></span> SRS 转推控制台 <span class="ver" id="ver"></span></div>
+  <div class="stats" id="stats"></div>
+  <button class="btn" onclick="loadAll(true)">刷新</button>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="streams" class="active">直播流</button>
+  <button data-tab="jobs">转推任务</button>
+  <button data-tab="targets">推流目标</button>
+  <button data-tab="recordings">录像库</button>
+  <button data-tab="settings">设置</button>
+</nav>
+
+<main>
+  <section class="panel active" id="p-streams">
+    <div class="card" style="margin-bottom:14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:12px 14px">
+      <div style="font-size:13px">推流地址</div>
+      <code id="push-hint" style="flex:1;min-width:260px;background:#f5f7fa;padding:7px 10px;border-radius:7px;word-break:break-all">-</code>
+      <button class="btn sm" onclick="copyText(document.getElementById('push-hint').textContent)">复制</button>
+      <span class="muted" style="font-size:12px">把「流名」换成任意名字，例如 camera01</span>
+      <span class="badge ${S.autoRecord ? 'ok' : 'off'}" title="在「设置」里可关闭">自动录制：${S.autoRecord ? '开' : '关'}</span>
+    </div>
+    <div class="toolbar">
+      <h2>实时流（来源于 SRS）</h2>
+      <span class="muted" id="stream-hint"></span>
+      <div class="spacer"></div>
+      <button class="btn" onclick="openManualRecord()">按流名录制</button>
+    </div>
+    <div id="streams-box"></div>
+  </section>
+
+  <section class="panel" id="p-jobs">
+    <div class="toolbar">
+      <h2>转推任务（推流到第三方平台）</h2>
+      <div class="spacer"></div>
+      <button class="btn primary" onclick="openJobModal()">新建任务</button>
+    </div>
+    <div id="jobs-box"></div>
+  </section>
+
+  <section class="panel" id="p-targets">
+    <div class="toolbar">
+      <h2>第三方推流地址</h2>
+      <div class="spacer"></div>
+      <button class="btn primary" onclick="openTargetModal()">新增地址</button>
+    </div>
+    <div id="targets-box"></div>
+  </section>
+
+  <section class="panel" id="p-recordings">
+    <div class="toolbar">
+      <h2>录像库</h2>
+      <span class="muted" id="rec-hint"></span>
+      <div class="spacer"></div>
+    </div>
+    <div id="rec-box"></div>
+  </section>
+
+  <section class="panel" id="p-settings">
+    <div class="toolbar"><h2>设置</h2></div>
+    <div class="card" style="max-width:640px" id="settings-box"></div>
+  </section>
+</main>
+
+<div id="modal-root"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const S = { streams: [], jobs: [], targets: [], recordings: [], layouts: [], settings: {}, overview: {}, autoRecord: true };
+let refreshTimer = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, {
+    method: opts.method || 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+  return data;
+}
+
+function toast(msg, isErr) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.className = 'toast'; }, 2600);
+}
+
+// 在当前页面用 iframe 内嵌 SRS 播放器预览，避免用户跳到新标签以为"打不开"
+function openPreview(app, stream, title) {
+  const url = playerURL(app, stream);
+  const info = S.streams.find(x => x.app === app && x.stream === stream);
+  let warn = '';
+  if (!info || !info.active) {
+    warn = '<div class="hint" style="color:var(--warn)">该流当前没有推流（状态不是「推流中」），预览会是黑屏。</div>';
+  } else if (/H265|HEVC/i.test(info.video || '')) {
+    warn = '<div class="hint" style="color:var(--warn)">该流是 H.265/HEVC，浏览器 HTTP-FLV 播放通常不支持，请改用 H.264 推流，或用 VLC 播放下面的 FLV 地址。</div>';
+  }
+  const m = openModal('实时预览 · ' + (title || (app + '/' + stream)), `
+    <div style="background:#000;border-radius:8px;overflow:hidden">
+      <iframe src="${url}" style="width:100%;height:56vh;border:0;display:block" allow="autoplay; fullscreen"></iframe>
+    </div>
+    ${warn}
+    <div class="hint">若画面区域仍是黑的：可点「新窗口打开」看具体报错，或用 VLC/PotPlayer 播放下面的 FLV 地址（可绕过浏览器限制）。</div>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <a class="btn sm" href="${url}" target="_blank" rel="noreferrer">新窗口打开</a>
+      <button class="btn sm" onclick="copyText('${esc(streamURLs(app, stream).flv)}')">复制 FLV 地址</button>
+      <button class="btn sm" onclick="copyText('${esc(streamURLs(app, stream).hls)}')">复制 HLS 地址</button>
+    </div>
+    <div class="url mono">${esc(location.origin + '/' + app + '/' + stream + '.flv')}</div>
+  `, null, 'wide');
+  return m;
+}
+
+function copyText(text) {
+  const full = text.indexOf('http') === 0 ? text : location.origin + (text[0] === '/' ? '' : '/') + text;
+  const done = () => toast('已复制: ' + full);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(full).then(done).catch(() => fallback());
+  } else { fallback(); }
+  function fallback() {
+    const ta = document.createElement('textarea');
+    ta.value = full; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { prompt('复制下面的地址:', full); }
+    document.body.removeChild(ta);
+  }
+}
+
+function nz(v, d) { return (v === null || v === undefined || v === '') ? d : v; }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fmtBytes(n) {
+  if (!n) return '-';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + u[i];
+}
+function fmtDur(sec) {
+  if (!sec) return '-';
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0');
+}
+function fmtTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+const STATUS_TEXT = {
+  running: ['运行中', 'run'], waiting: ['等待源流', 'warn'], starting: ['启动中', 'warn'],
+  retrying: ['重连中', 'warn'], error: ['异常', 'err'], stopped: ['已停止', 'off'],
+};
+
+// ---------- 加载 ----------
+async function loadAll(manual) {
+  try {
+    const [ov, st, jb, tg, rc, st2, ly] = await Promise.all([
+      api('/overview'), api('/streams'), api('/jobs'), api('/targets'),
+      api('/recordings'), api('/settings'), api('/layouts'),
+    ]);
+    Object.assign(S, {
+      overview: ov, streams: st.streams || [], autoRecord: !!st.auto_record, jobs: jb.jobs || [],
+      targets: tg.targets || [], recordings: rc.recordings || [],
+      settings: st2, layouts: ly.layouts || [],
+    });
+    renderHead(); renderStreams(); renderJobs(); renderTargets(); renderRecordings(); renderSettings();
+    if (manual) toast('已刷新');
+  } catch (e) {
+    toast('加载失败: ' + e.message, true);
+  }
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    // 页面在后台时不刷新，避免无谓的重绘
+    if (document.hidden) { loadAll(false); return; }
+    loadAll(false);
+  }, 5000);
+}
+
+function renderHead() {
+  const o = S.overview;
+  document.getElementById('dot').className = 'dot' + (o.srs_error ? ' off' : '');
+  document.getElementById('ver').textContent = o.srs_version ? ('SRS ' + o.srs_version) : (o.srs_error ? 'SRS 连接异常' : '');
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><b>${nz(o.streams_active, 0)}/${nz(o.streams_total, 0)}</b><span>在线源流</span></div>
+    <div class="stat"><b>${nz(o.jobs_running, 0)}/${nz(o.jobs_total, 0)}</b><span>运行中任务</span></div>
+    <div class="stat"><b>${nz(o.recordings_active, 0)}</b><span>录制中</span></div>
+    <div class="stat"><b>${nz(o.recordings_total, 0)}</b><span>录像文件</span></div>`;
+}
+
+// ---------- 直播流 ----------
+// 播放器页走控制面反代（/players/ → SRS:8080），因此用当前访问地址即可。
+// 注意：SRS 的播放器页只有带 autostart=true 才会自动播放，否则只显示一个空 URL 输入框。
+function playerURL(app, stream, suffix) {
+  const base = (S.settings.public_base || location.origin).replace(/\/$/, '');
+  const tail = (suffix === undefined) ? '.flv' : suffix;
+  const q = 'autostart=true&schema=http&app=' + encodeURIComponent(app) + '&stream=' + encodeURIComponent(stream) + tail;
+  return base + '/players/srs_player.html?' + q;
+}
+// 推流基地址：优先用「对外推流地址」（端口映射后的真实地址）
+function rtmpBase() {
+  const pub = (S.settings.rtmp_public || '').trim();
+  const base = (pub || S.settings.rtmp_base || 'rtmp://127.0.0.1:1935').replace(/\/$/, '');
+  // 端口按配置保留，主机名跟随当前访问地址（换机器访问也能用）
+  return base.replace(/\/\/[^/:]+/, '//' + location.hostname) + '/';
+}
+
+// 直播流地址（相对当前站点，经反代命中 SRS 的 HTTP-FLV / HLS）
+function streamURLs(app, stream) {
+  const base = (S.settings.public_base || '').replace(/\/$/, '');
+  return {
+    flv: base + '/' + app + '/' + stream + '.flv',
+    hls: base + '/' + app + '/' + stream + '.m3u8',
+  };
+}
+let fpStreams = '';
+function renderStreams(force) {
+  const box = document.getElementById('streams-box');
+  const list = S.streams;
+  const hint = document.getElementById('push-hint');
+  if (hint) hint.textContent = rtmpBase() + 'live/流名';
+  // 内容没变就不重建表格，避免刷新时按钮/交互被打断
+  const fp = list.map(x => [x.key, x.active ? 1 : 0, x.video, x.kbps_recv, x.clients,
+    x.recording ? x.recording.id + '@' + Math.floor(x.recording.duration / 5) : '-'].join(':')).join('|');
+  if (!force && fp === fpStreams && box.querySelector('table')) return;
+  fpStreams = fp;
+  document.getElementById('stream-hint').textContent = S.overview.srs_error ? ('SRS API 异常：' + S.overview.srs_error) : '';
+  if (!list.length) {
+    box.innerHTML = `<div class="empty">暂无流。用 OBS/ffmpeg 推流到 <code>${esc(rtmpBase())}live/流名</code> 即可看到。<br>
+      <span class="muted" style="font-size:12px">若推流后这里仍是空的：确认推流地址的端口与本页提示一致（容器端口映射后可能与 1935 不同）。</span></div>`;
+    return;
+  }
+  box.innerHTML = `<table><thead><tr>
+      <th>流名 (app/stream)</th><th>状态</th><th>视频</th><th>音频</th><th>码率</th><th>观看</th><th style="text-align:right">操作</th>
+    </tr></thead><tbody>${list.map(s => `
+    <tr>
+      <td><span class="mono">${esc(s.key)}</span></td>
+      <td>${s.active ? '<span class="badge ok">推流中</span>' : '<span class="badge off">无推流</span>'}</td>
+      <td>${s.has_video ? esc(s.video) : '<span class="muted">-</span>'}</td>
+      <td>${s.has_audio ? esc(s.audio) : '<span class="muted">仅视频</span>'}</td>
+      <td>${s.kbps_recv ? s.kbps_recv + ' kbps' : '-'}</td>
+      <td>${nz(s.clients, 0)}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn sm primary" onclick="openPreview('${esc(s.app)}','${esc(s.stream)}','${esc(s.key)}')">预览</button>
+        <button class="btn sm" onclick="copyText('${esc(streamURLs(s.app, s.stream).flv)}')">FLV 地址</button>
+        ${s.recording
+          ? `<button class="btn sm danger" onclick="stopStreamRecord('${esc(s.recording.id)}','${esc(s.key)}')">停止录制</button>`
+          : `<button class="btn sm" onclick="startRecord('${esc(s.key)}')">开始录制</button>`}
+        <button class="btn sm" onclick="openJobModal(null, '${esc(s.key)}')">转推</button>
+      </td>
+    </tr>`).join('')}</tbody></table>
+    <div class="url">RTMP 推流地址模板：<code>${esc(rtmpBase())}[app]/[stream]</code>
+      ${S.settings.rtmp_public ? '' : '<span style="color:var(--warn)">（未配置对外推流地址，若容器端口做过映射，请在设置里填「对外推流地址」，否则推流会连到错误端口）</span>'}</div>`;
+}
+
+async function startRecord(key) {
+  try {
+    const m = await api('/recordings', { method: 'POST', body: { stream: key } });
+    // 接口是幂等的：如果这路流已经在录（多半是"自动录制"或之前点过），提示清楚
+    const started = m && m.started_at ? new Date(m.started_at).getTime() : Date.now();
+    if (Date.now() - started > 8000) {
+      toast('该流已在录制中（开始于 ' + fmtTime(m.started_at) + '），文件见「录像库」');
+    } else {
+      toast('已开始录制 ' + key + '，文件见「录像库」');
+    }
+    recFingerprint = '';   // 强制刷新录像库
+    loadAll(false);
+  } catch (e) { toast('录制失败: ' + e.message, true); }
+}
+
+// 直播流页直接停止某一路录制（停止后自动转封装成可播放 MP4）
+async function stopStreamRecord(id, key) {
+  if (!confirm('停止录制 ' + key + '？停止后会自动封装成可播放的 MP4。')) return;
+  try {
+    await api('/recordings/' + encodeURIComponent(id) + '/stop', { method: 'POST' });
+    toast('已停止录制，正在封装…');
+    recFingerprint = '';
+    loadAll(false);
+    setTimeout(() => loadAll(false), 2500);
+  } catch (e) { toast('停止失败: ' + e.message, true); }
+}
+
+function openManualRecord() {
+  openModal('按流名录制', `
+    <div class="field"><label>流名（app/stream）</label>
+      <input type="text" id="mr-stream" placeholder="live/camera01">
+      <div class="hint">即使流当前离线也会开始录制，等流上线后自动写入文件。</div>
+    </div>`, async () => {
+    const stream = document.getElementById('mr-stream').value.trim();
+    if (!stream) { toast('请填写流名', true); return false; }
+    await api('/recordings', { method: 'POST', body: { stream } });
+    toast('已开始录制'); loadAll(false); return true;
+  });
+}
+
+// ---------- 转推任务 ----------
+function layoutIcon(l) {
+  const s = '<svg width="34" height="22" viewBox="0 0 34 22" fill="none" stroke="currentColor" stroke-width="1.4">';
+  const r = (x, y, w, h) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1.5"/>`;
+  const map = {
+    single: r(1, 1, 32, 20),
+    vstack: r(1, 1, 32, 9) + r(1, 12, 32, 9),
+    hstack: r(1, 1, 15, 20) + r(18, 1, 15, 20),
+    grid: r(1, 1, 15, 9) + r(18, 1, 15, 9) + r(1, 12, 15, 9) + r(18, 12, 15, 9),
+    pip: r(1, 1, 32, 20) + `<rect x="21" y="3" width="10" height="8" rx="1.5" fill="currentColor" fill-opacity=".25"/>`,
+    circle: r(1, 1, 32, 20) + `<circle cx="26" cy="7" r="5" fill="currentColor" fill-opacity=".25"/>`,
+  };
+  return s + (map[l] || map.single) + '</svg>';
+}
+
+let fpJobs = '';
+function renderJobs(force) {
+  const box = document.getElementById('jobs-box');
+  if (!S.jobs.length) {
+    box.innerHTML = `<div class="empty">还没有转推任务。点击右上角「新建任务」，把本地流推到 B站 / 视频号 / YouTube 等平台。</div>`;
+    return;
+  }
+  const fp = S.jobs.map(j => [j.id, (j.runtime || {}).status, (j.runtime || {}).detail,
+    ((j.runtime || {}).targets || []).map(t => t.status + t.restarts).join(',')].join(':')).join('|');
+  if (!force && fp === fpJobs && box.querySelector('.card')) return;
+  fpJobs = fp;
+  box.innerHTML = `<div class="grid">${S.jobs.map(j => {
+    const rt = j.runtime || {};
+    const [txt, cls] = STATUS_TEXT[rt.status] || ['未知', 'off'];
+    const living = ['running', 'waiting', 'retrying', 'starting'].includes(rt.status);
+    const targets = rt.targets || [];
+    const running = targets.filter(t => t.status === 'running').length;
+    return `<div class="card">
+      <h3>${esc(j.name)} <span class="badge ${cls}">${txt}</span>
+        ${j.mode === 'mix' ? '<span class="badge">混流</span>' : '<span class="badge">直转</span>'}
+        ${j.auto_start ? '<span class="badge">自动</span>' : ''}</h3>
+      <div class="rows">
+        <span class="k">源流</span><span class="mono">${esc((j.sources || []).join(' + '))}</span>
+        ${j.mode === 'mix' ? `<span class="k">布局</span><span>${esc((S.layouts.find(l => l.key === j.layout) || {}).name || j.layout)} · ${j.width}×${j.height} · ${j.fps}fps · ${j.video_bitrate}kbps</span>` : ''}
+        <span class="k">目标</span><span>${targets.length ? running + '/' + targets.length + ' 路推送中' : '未配置'}</span>
+        ${rt.detail ? `<span class="k">详情</span><span class="muted">${esc(rt.detail)}</span>` : ''}
+      </div>
+      ${targets.length ? `<div style="margin:6px 0 2px;display:flex;flex-direction:column;gap:3px">
+        ${targets.map(t => {
+          const [tt, tc] = STATUS_TEXT[t.status] || ['-', 'off'];
+          return `<div style="display:flex;gap:8px;align-items:center;font-size:11px">
+            <span class="badge ${tc}">${tt}</span>
+            <span class="mono" style="word-break:break-all">${esc(maskKey(t.url))}</span>
+            ${t.restarts ? `<span class="muted">重连${t.restarts}</span>` : ''}
+            ${t.detail ? `<span style="color:var(--err);font-size:11px">${esc(t.detail)}</span>` : ''}
+          </div>`;
+        }).join('')}</div>` : ''}
+      <div class="toolbar" style="margin:10px 0 0">
+        ${living
+          ? `<button class="btn sm" onclick="jobAction('${j.id}','stop')">停止</button>
+             <button class="btn sm" onclick="jobAction('${j.id}','restart')">重启</button>`
+          : `<button class="btn sm primary" onclick="jobAction('${j.id}','start')">启动</button>`}
+        <button class="btn sm" onclick="showLog('${j.id}','${esc(j.name)}')">日志</button>
+        ${j.mode === 'mix' ? `<button class="btn sm" onclick="openPreview('mix','${j.id}','混流输出')">预览混流</button>` : ''}
+        <div class="spacer"></div>
+        <button class="btn sm" onclick="openJobModal('${j.id}')">编辑</button>
+        <button class="btn sm danger" onclick="delJob('${j.id}','${esc(j.name)}')">删除</button>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function maskKey(u) {
+  // 隐藏第三方推流密钥。
+  const m = u.match(/^(rtmps?:\/\/[^\/]+\/[^\/]+)(\/.*)$/);
+  if (!m) return u;
+  const key = m[2];
+  if (key.length <= 6) return u;
+  return m[1] + key.slice(0, 3) + '****' + key.slice(-2);
+}
+
+async function jobAction(id, action) {
+  try {
+    const r = await api('/jobs/' + id + '/' + action, { method: 'POST' });
+    if (r && r.status === 'waiting') toast('任务已启动，正在等待源流上线');
+    else toast('操作成功');
+    loadAll(false);
+  } catch (e) { toast('操作失败: ' + e.message, true); }
+}
+
+async function delJob(id, name) {
+  if (!confirm('删除任务「' + name + '」？正在运行的会被停止。')) return;
+  try { await api('/jobs/' + id, { method: 'DELETE' }); toast('已删除'); loadAll(false); }
+  catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+async function showLog(id, name) {
+  const m = openModal('运行日志 · ' + name, `<pre class="log" id="log-box">加载中…</pre>
+    <div class="hint">命令与 ffmpeg 输出（最多 200 行），用于排查推流失败原因。</div>`, null, 'wide');
+  const tick = async () => {
+    try {
+      const r = await api('/jobs/' + id + '/log?lines=200');
+      const el = document.getElementById('log-box');
+      if (!el) return;
+      const cmd = r.runtime && r.runtime.command ? '$ ' + r.runtime.command + '\n\n' : '';
+      el.textContent = cmd + (r.lines && r.lines.length ? r.lines.join('\n') : '(暂无日志)');
+      el.scrollTop = el.scrollHeight;
+    } catch (e) {}
+  };
+  tick();
+  const t = setInterval(tick, 2500);
+  m.onClose = () => clearInterval(t);
+}
+
+// ---------- 任务表单 ----------
+async function openJobModal(id, presetSource) {
+  const job = id ? S.jobs.find(j => j.id === id) : null;
+  const j = job || {
+    name: '', mode: 'direct', sources: presetSource ? [presetSource] : [], layout: 'vstack',
+    width: 1280, height: 720, fps: 25, video_bitrate: 2500, audio_bitrate: 128, audio_mode: 'mix',
+    pip_size: 28, pip_pos: 'topright', gap: 8, background: '0x101014',
+    target_ids: [], extra_urls: [], auto_start: true, enabled: true,
+  };
+  const sourceChips = S.streams.map(s =>
+    `<span class="chip ${j.sources.includes(s.key) ? 'on' : ''}" data-src="${esc(s.key)}">${esc(s.key)}${s.active ? '' : ' (离线)'}</span>`).join('');
+  const targetChips = S.targets.map(t =>
+    `<span class="chip ${j.target_ids.includes(t.id) ? 'on' : ''}" data-tg="${esc(t.id)}">${esc(t.name || t.url)}</span>`).join('');
+
+  const body = `
+    <div class="row2">
+      <div class="field"><label>任务名称</label><input type="text" id="f-name" value="${esc(j.name)}" placeholder="例如：主会场推B站"></div>
+      <div class="field"><label>转推模式</label>
+        <select id="f-mode">
+          <option value="direct" ${j.mode === 'direct' ? 'selected' : ''}>单流转推（不转码，最省 CPU）</option>
+          <option value="mix" ${j.mode === 'mix' ? 'selected' : ''}>混流转推（多路合成一路）</option>
+        </select>
+      </div>
+    </div>
+    <div class="field"><label>源流（可多选）</label>
+      <div class="chips" id="f-sources">${sourceChips || '<span class="muted">暂无在线流，可手动填写</span>'}</div>
+      <input type="text" id="f-sources-manual" placeholder="也可手动输入，逗号分隔，如 live/a,live/b" style="margin-top:8px"
+        value="${esc(j.sources.filter(s => !S.streams.some(x => x.key === s)).join(','))}">
+    </div>
+
+    <div id="mix-box" style="${j.mode === 'mix' ? '' : 'display:none'}">
+      <div class="field"><label>混流布局</label>
+        <div class="layout-pick" id="f-layout">${S.layouts.map(l => `
+          <div class="lp ${j.layout === l.key ? 'on' : ''}" data-layout="${l.key}" title="${esc(l.desc)}">
+            ${layoutIcon(l.key)}${esc(l.name)}</div>`).join('')}</div>
+        <div class="hint" id="layout-hint"></div>
+      </div>
+      <div class="row3">
+        <div class="field"><label>输出分辨率</label>
+          <select id="f-res">
+            ${[[1280,720],[1920,1080],[960,540],[854,480],[640,360],[1080,1920],[720,1280]].map(([w,h]) =>
+              `<option value="${w}x${h}" ${j.width === w && j.height === h ? 'selected' : ''}>${w}×${h}${h > w ? '（竖屏）' : ''}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>帧率</label><input type="number" id="f-fps" value="${j.fps}" min="5" max="60"></div>
+        <div class="field"><label>视频码率 (kbps)</label><input type="number" id="f-vb" value="${j.video_bitrate}" min="300" step="100"></div>
+      </div>
+      <div class="row3">
+        <div class="field"><label>音频来源</label>
+          <select id="f-amode">
+            <option value="mix" ${j.audio_mode === 'mix' ? 'selected' : ''}>多路混音</option>
+            <option value="first" ${j.audio_mode === 'first' ? 'selected' : ''}>只用第一路</option>
+            <option value="none" ${j.audio_mode === 'none' ? 'selected' : ''}>不要音频</option>
+          </select></div>
+        <div class="field"><label>音频码率 (kbps)</label><input type="number" id="f-ab" value="${j.audio_bitrate}" min="32" step="16"></div>
+        <div class="field"><label>宫格间距 (px)</label><input type="number" id="f-gap" value="${j.gap}" min="0" max="80"></div>
+      </div>
+      <div class="row3" id="pip-box">
+        <div class="field"><label>小窗尺寸（占宽度 %）</label><input type="number" id="f-pipsize" value="${j.pip_size}" min="5" max="90"></div>
+        <div class="field"><label>小窗位置</label>
+          <select id="f-pippos">
+            <option value="topright" ${j.pip_pos === 'topright' ? 'selected' : ''}>右上</option>
+            <option value="topleft" ${j.pip_pos === 'topleft' ? 'selected' : ''}>左上</option>
+            <option value="bottomright" ${j.pip_pos === 'bottomright' ? 'selected' : ''}>右下</option>
+            <option value="bottomleft" ${j.pip_pos === 'bottomleft' ? 'selected' : ''}>左下</option>
+          </select></div>
+        <div class="field"><label>填充底色</label><input type="text" id="f-bg" value="${esc(j.background)}"></div>
+      </div>
+    </div>
+
+    <div class="field"><label>推流目标（第三方平台）</label>
+      <div class="chips" id="f-targets">${targetChips || '<span class="muted">还没配置推流地址，请先到「推流目标」页添加</span>'}</div>
+      <input type="text" id="f-extra" placeholder="临时地址，逗号分隔，如 rtmp://a.com/live/xxx" style="margin-top:8px"
+        value="${esc((j.extra_urls || []).join(','))}">
+      <div class="hint">每个目标各起一个轻量中继（-c copy，不重复转码）。
+        目标在宿主机上时不要用 127.0.0.1（那是容器自己），请用宿主机 IP 或 host.docker.internal。</div>
+    </div>
+
+    <div class="hint" style="margin-bottom:6px">提示：混流任务的合成结果会同时发布到本地 <code>mix/任务ID</code>，可在「转推任务」里点「预览混流」查看。</div>
+    <div class="check"><input type="checkbox" id="f-auto" ${j.auto_start ? 'checked' : ''}>
+      <label for="f-auto" style="margin:0">源流一上线就自动开始推流</label></div>
+    <div class="check"><input type="checkbox" id="f-enabled" ${j.enabled ? 'checked' : ''}>
+      <label for="f-enabled" style="margin:0">启用该任务</label></div>
+  `;
+
+  const m = openModal(job ? '编辑转推任务' : '新建转推任务', body, async () => {
+    const sources = [...document.querySelectorAll('#f-sources .chip.on')].map(e => e.dataset.src);
+    const manual = document.getElementById('f-sources-manual').value.split(/[,，\s]+/).filter(Boolean);
+    const all = [...new Set(sources.concat(manual))];
+    if (!all.length) { toast('请至少选择一个源流', true); return false; }
+    const [w, h] = document.getElementById('f-res').value.split('x').map(Number);
+    const extra = document.getElementById('f-extra').value.split(/[,，\s]+/).filter(Boolean);
+    const mode = document.getElementById('f-mode').value;
+    if (mode === 'direct' && all.length > 1) { toast('单流转推只能选一个源流，多路请选混流转推', true); return false; }
+    const payload = {
+      name: document.getElementById('f-name').value.trim() || '未命名任务',
+      mode,
+      sources: all,
+      layout: (document.querySelector('#f-layout .lp.on')||{}).dataset ? (document.querySelector('#f-layout .lp.on')).dataset.layout : 'vstack' || 'vstack',
+      width: w, height: h,
+      fps: Number(document.getElementById('f-fps').value) || 25,
+      video_bitrate: Number(document.getElementById('f-vb').value) || 2500,
+      audio_bitrate: Number(document.getElementById('f-ab').value) || 128,
+      audio_mode: document.getElementById('f-amode').value,
+      pip_size: Number(document.getElementById('f-pipsize').value) || 28,
+      pip_pos: document.getElementById('f-pippos').value,
+      gap: Number(document.getElementById('f-gap').value) || 0,
+      background: document.getElementById('f-bg').value || '0x101014',
+      target_ids: [...document.querySelectorAll('#f-targets .chip.on')].map(e => e.dataset.tg),
+      extra_urls: extra,
+      auto_start: document.getElementById('f-auto').checked,
+      enabled: document.getElementById('f-enabled').checked,
+    };
+    if (job) await api('/jobs/' + job.id, { method: 'PUT', body: payload });
+    else await api('/jobs', { method: 'POST', body: payload });
+    toast(job ? '已保存' : '任务已创建');
+    loadAll(false);
+    return true;
+  }, 'wide');
+
+  // 交互绑定
+  const mixBox = m.querySelector('#mix-box');
+  m.querySelector('#f-mode').addEventListener('change', e => {
+    const mix = e.target.value === 'mix';
+    mixBox.style.display = mix ? '' : 'none';
+    if (!mix) { /* 保持原布局，不影响 */ }
+    updateLayoutHint(m);
+  });
+  m.querySelectorAll('#f-layout .lp').forEach(el => el.addEventListener('click', () => {
+    m.querySelectorAll('#f-layout .lp').forEach(x => x.classList.remove('on'));
+    el.classList.add('on');
+    updateLayoutHint(m);
+  }));
+  m.querySelectorAll('#f-sources .chip').forEach(el => el.addEventListener('click', () => {
+    el.classList.toggle('on');
+    updateLayoutHint(m);
+  }));
+  m.querySelectorAll('#f-targets .chip').forEach(el => el.addEventListener('click', () => el.classList.toggle('on')));
+  updateLayoutHint(m);
+}
+
+function updateLayoutHint(root) {
+  const n = root.querySelectorAll('#f-sources .chip.on').length;
+  const lay = (root.querySelector('#f-layout .lp.on')||{}).dataset ? (root.querySelector('#f-layout .lp.on')).dataset.layout : 'vstack' || 'vstack';
+  const info = S.layouts.find(l => l.key === lay) || {};
+  const el = root.querySelector('#layout-hint');
+  const hints = {
+    vstack: '多路竖向等分（上下叠加），适合主持人 + 画面。',
+    hstack: '多路横向等分（左右并排），适合双人访谈。',
+    grid: '按 2×2 / 3×3 自动宫格排布，路数越多格子越小。',
+    pip: '第一路铺满，其余为方窗小画面叠在角落。',
+    circle: '第一路铺满，其余为圆形窗口（适合主播头像/特写）。',
+    single: '只用第一路铺满整幅画面（可用于把源转成固定分辨率）。',
+  };
+  el.innerHTML = `已选 <b>${n}</b> 路源流。${hints[lay] || ''}` + (n > (info.max_sources || 9) ? ' <span style="color:var(--err)">路数偏多，画面会很拥挤</span>' : '');
+}
+
+// ---------- 推流目标 ----------
+let fpTargets = '';
+function renderTargets(force) {
+  const box = document.getElementById('targets-box');
+  if (!S.targets.length) {
+    box.innerHTML = `<div class="empty">还没有推流地址。点击「新增地址」填入第三方平台的 RTMP 推流地址与串流密钥。</div>`;
+    return;
+  }
+  const fp = S.targets.map(t => [t.id, t.name, t.url, t.enabled ? 1 : 0, t.remark].join(':')).join('|');
+  if (!force && fp === fpTargets && box.querySelector('table')) return;
+  fpTargets = fp;
+  box.innerHTML = `<table><thead><tr><th>名称</th><th>推流地址</th><th>状态</th><th>备注</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${S.targets.map(t => `<tr>
+    <td><b>${esc(t.name || '(未命名)')}</b></td>
+    <td class="mono">${esc(maskKey(t.url))}</td>
+    <td>${t.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge off">停用</span>'}</td>
+    <td class="muted">${esc(t.remark || '-')}</td>
+    <td style="text-align:right;white-space:nowrap">
+      <button class="btn sm" onclick="openTargetModal('${t.id}')">编辑</button>
+      <button class="btn sm danger" onclick="delTarget('${t.id}','${esc(t.name || t.url)}')">删除</button>
+    </td></tr>`).join('')}</tbody></table>`;
+}
+
+function openTargetModal(id) {
+  const t = id ? S.targets.find(x => x.id === id) : { name: '', url: '', enabled: true, remark: '' };
+  openModal(id ? '编辑推流地址' : '新增推流地址', `
+    <div class="field"><label>名称</label><input type="text" id="t-name" value="${esc(t.name)}" placeholder="例如：B站直播间"></div>
+    <div class="field"><label>推流地址（RTMP）</label>
+      <input type="text" id="t-url" value="${esc(t.url)}" placeholder="rtmp://live-push.bilivideo.com/live-bvc/xxxx?key=yyyy">
+      <div class="hint">通常是「服务器地址 + 串流密钥」拼接而成，需包含 app 与流名。</div>
+      <div class="hint" style="color:var(--warn)">⚠ 目标在宿主机上的另一个服务时，<b>不要用 127.0.0.1</b>——容器里的 127.0.0.1 指向容器自己。
+        请用宿主机 IP（如 rtmp://192.168.0.14:1935/live/xxx）或 host.docker.internal。</div></div>
+    <div class="field"><label>备注</label><input type="text" id="t-remark" value="${esc(t.remark || '')}" placeholder="可选，例如带宽/线路说明"></div>
+    <div class="check"><input type="checkbox" id="t-enabled" ${t.enabled ? 'checked' : ''}><label for="t-enabled" style="margin:0">启用</label></div>
+  `, async () => {
+    const payload = {
+      name: document.getElementById('t-name').value.trim(),
+      url: document.getElementById('t-url').value.trim(),
+      remark: document.getElementById('t-remark').value.trim(),
+      enabled: document.getElementById('t-enabled').checked,
+    };
+    if (!payload.url) { toast('请填写推流地址', true); return false; }
+    if (/^rtmps?:\/\/(127\.0\.0\.1|localhost)([:\/]|$)/i.test(payload.url)) {
+      if (!confirm('注意：127.0.0.1 在容器内指向容器自己，不是宿主机。\n\n' +
+                   '如果目标是宿主机上的另一个 SRS/平台，请改成宿主机 IP（或 host.docker.internal）。\n\n' +
+                   '仍要保存这个地址吗？')) return false;
+    }
+    if (id) await api('/targets/' + id, { method: 'PUT', body: payload });
+    else await api('/targets', { method: 'POST', body: payload });
+    toast('已保存'); loadAll(false); return true;
+  });
+}
+
+async function delTarget(id, name) {
+  if (!confirm('删除推流地址「' + name + '」？引用它的任务将失去目标。')) return;
+  try { await api('/targets/' + id, { method: 'DELETE' }); toast('已删除'); loadAll(false); }
+  catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+// ---------- 录像 ----------
+// 录像库渲染的"指纹"：内容没变就不重建 DOM，
+// 否则每 5 秒的自动刷新会把正在播放的 <video> 元素销毁重建，导致播放中断。
+let recFingerprint = '';
+let recLastInteract = 0;
+
+function recTouch() { recLastInteract = Date.now(); }
+
+function anyVideoPlaying() {
+  const vs = document.querySelectorAll('#rec-box video');
+  for (let i = 0; i < vs.length; i++) {
+    const v = vs[i];
+    if (!v.paused && !v.ended && v.currentTime > 0) return true;
+  }
+  return false;
+}
+
+// 只更新右上角的统计文字（不触碰卡片 DOM）
+function updateRecHint(recs) {
+  const activeCount = recs.filter(r => r.active).length;
+  const totalSize = recs.reduce((a, r) => a + (r.size || 0), 0);
+  const playing = anyVideoPlaying();
+  const el = document.getElementById('rec-hint');
+  if (!el) return;
+  el.textContent = recs.length
+    ? `${recs.length} 个文件 / ${fmtBytes(totalSize)}` + (activeCount ? ` · ${activeCount} 路录制中` : '')
+      + (playing ? ' · 播放中（已暂停自动刷新）' : '')
+    : '';
+}
+
+function renderRecordings(force) {
+  const box = document.getElementById('rec-box');
+  const recs = S.recordings || [];
+  updateRecHint(recs);
+
+  if (!recs.length) {
+    box.innerHTML = `<div class="empty">还没有录像。<br>
+      推流上线后会自动录制（可在「设置」里关闭），也可以在「直播流」页手动开始录制。<br>
+      <span class="muted" style="font-size:12px">录像保存在容器的 /data/recordings（对应宿主机的 /data 挂载或数据卷）。</span></div>`;
+    return;
+  }
+
+  // 计算内容指纹：只有文件集合、录制状态、大小（MB）、时长（秒）变化时才重绘
+  const fp = recs.map(r => [r.id, r.active ? 1 : 0, Math.floor((r.size || 0) / 1048576),
+                            Math.round(r.duration || 0), r.needs_repair ? 1 : 0].join(':')).join('|');
+  const playing = anyVideoPlaying();
+  const recentlyTouched = (Date.now() - recLastInteract) < 15000;
+  if (!force && (fp === recFingerprint || playing || recentlyTouched)) {
+    updateRecHint(recs);
+    return;
+  }
+  recFingerprint = fp;
+
+  box.innerHTML = `<div class="grid">${recs.map(r => {
+    // 录制中的文件是「分片 MP4」：索引不完整、时长未知，浏览器只能播到已写入的位置，
+    // 所以这里不直接挂 <video>，避免被误判成坏文件。
+    if (r.active) {
+      return `<div class="card">
+        <div style="width:100%;aspect-ratio:16/9;border-radius:8px;background:#0f1524;color:#cbd5e1;
+             display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">
+          <div style="display:flex;align-items:center;gap:8px;font-size:13px">
+            <span style="width:9px;height:9px;border-radius:50%;background:#ef4444;display:inline-block"></span>正在录制
+          </div>
+          <div style="font-size:20px;font-weight:600">${fmtDur(r.duration)}</div>
+          <div style="font-size:11px;opacity:.7">${fmtBytes(r.size)}</div>
+          <div style="font-size:11px;opacity:.55;text-align:center;padding:0 12px">停止后可完整回放与拖动</div>
+        </div>
+        <h3 style="margin-top:10px">${esc(r.stream)} <span class="badge run">录制中</span></h3>
+        <div class="rows">
+          <span class="k">开始</span><span>${fmtTime(r.started_at)}</span>
+          <span class="k">已录</span><span>${fmtDur(r.duration)}</span>
+          <span class="k">大小</span><span>${fmtBytes(r.size)}</span>
+        </div>
+        <div class="toolbar" style="margin:0">
+          <button class="btn sm primary" onclick="stopRecord('${esc(r.id)}')">停止并封装</button>
+          <button class="btn sm" onclick="openPreview('${esc(r.stream.split('/')[0])}','${esc(r.stream.split('/')[1] || '')}','${esc(r.stream)}')">看直播</button>
+        </div>
+      </div>`;
+    }
+
+    const short = (r.duration && r.duration < 3);
+    return `<div class="card">
+      <video class="thumb" controls preload="metadata" src="/media/${encodeURIComponent(r.file)}"></video>
+      <h3 style="margin-top:10px">${esc(r.stream)} ${r.active ? '<span class="badge run">录制中</span>' : ''}
+        ${r.needs_repair ? '<span class="badge warn">未收尾</span>' : ''}
+        ${short ? '<span class="badge warn">时长短</span>' : ''}</h3>
+      ${r.needs_repair ? '<div class="hint" style="color:var(--warn)">这个文件没有正常收尾（录制被中断），播放可能只能到中断点。点「修复」重新封装即可完整播放。</div>' : ''}
+      <div class="rows">
+        <span class="k">开始</span><span>${fmtTime(r.started_at)}</span>
+        <span class="k">时长</span><span><b>${fmtDur(r.duration)}</b></span>
+        <span class="k">大小</span><span>${fmtBytes(r.size)}</span>
+        <span class="k">文件</span><span class="mono" style="word-break:break-all">${esc(r.file)}</span>
+      </div>
+      <div class="toolbar" style="margin:0">
+        <a class="btn sm" href="/media/${encodeURIComponent(r.file)}?download=1">下载</a>
+        <button class="btn sm" onclick="playHLS(this,'${esc(r.id)}')" title="生成 HLS 切片并用播放器播放，适合手机/微信内置浏览器">手机播放</button>
+        <button class="btn sm ${r.needs_repair ? 'primary' : ''}" onclick="repairRec(this,'${esc(r.id)}')" title="重新封装：修复索引/时长，浏览器可正常拖动">${r.needs_repair ? '修复并封装' : '修复'}</button>
+        <div class="spacer"></div>
+        <button class="btn sm danger" onclick="delRec('${esc(r.id)}','${esc(r.file)}')">删除</button>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+// 生成 HLS 并用 SRS 播放器页播放：手机/微信内置浏览器对整段大 MP4 支持差时用这条路
+async function playHLS(btn, id) {
+  recLastInteract = 0;
+  if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+  try {
+    const r = await api('/recordings/' + encodeURIComponent(id) + '/hls', { method: 'POST' });
+    // r.url 形如 /hls/<id>/index.m3u8 → app=hls, stream=<id>/index.m3u8
+    const parts = r.url.replace(/^\//, '').split('/');   // ['hls', id, 'index.m3u8']
+    const app = parts[0];
+    const stream = parts.slice(1).join('/');              // <id>/index.m3u8
+    const url = playerURL(app, stream, '');
+    const m = openPreviewHTML('HLS 播放 · ' + id, url);
+    m.onClose = null;
+  } catch (e) {
+    toast('生成 HLS 失败: ' + e.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '手机播放'; }
+  }
+}
+
+// 打开一个只含播放器 iframe 的弹窗
+function openPreviewHTML(title, url) {
+  return openModal(title, `
+    <div style="background:#000;border-radius:8px;overflow:hidden">
+      <iframe src="${url}" style="width:100%;height:56vh;border:0;display:block" allow="autoplay; fullscreen"></iframe>
+    </div>
+    <div class="hint">HLS 播放地址已生成，可分享给手机/微信使用。</div>
+    <div style="margin-top:8px;display:flex;gap:8px">
+      <a class="btn sm" href="${url}" target="_blank" rel="noreferrer">新窗口打开</a>
+      <button class="btn sm" onclick="copyText('${esc(url)}')">复制播放页地址</button>
+    </div>
+  `, null, 'wide');
+}
+
+async function repairRec(btn, id) {
+  recLastInteract = 0;
+  if (btn) { btn.disabled = true; btn.textContent = '修复中…'; }
+  try {
+    const m = await api('/recordings/' + encodeURIComponent(id) + '/repair', { method: 'POST' });
+    toast('修复完成，时长 ' + fmtDur(m.duration));
+    loadAll(false);
+  } catch (e) {
+    toast('修复失败: ' + e.message, true);
+    loadAll(false);
+  }
+}
+
+async function stopRecord(id) {
+  recLastInteract = 0;
+  try { await api('/recordings/' + encodeURIComponent(id) + '/stop', { method: 'POST' }); toast('已停止录制'); loadAll(false); }
+  catch (e) { toast('操作失败: ' + e.message, true); }
+}
+async function delRec(id, file) {
+  recLastInteract = 0;
+  if (!confirm('删除录像 ' + file + '？此操作会删除文件。')) return;
+  try { await api('/recordings/' + encodeURIComponent(id), { method: 'DELETE' }); toast('已删除'); loadAll(false); }
+  catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+// ---------- 设置 ----------
+let fpSettings = '';
+function renderSettings(force) {
+  const s = S.settings || {};
+  // 焦点在设置区内的输入框时，绝不重建（否则正在输入的内容会被冲掉）
+  const box0 = document.getElementById('settings-box');
+  const ae = document.activeElement;
+  if (!force && box0 && ae && box0.contains(ae) && ae.tagName !== 'BUTTON') return;
+  const fp = JSON.stringify(s);
+  if (!force && fp === fpSettings && box0 && box0.querySelector('input')) return;
+  fpSettings = fp;
+  document.getElementById('settings-box').innerHTML = `
+    <div class="check"><input type="checkbox" id="s-auto" ${s.auto_record ? 'checked' : ''}>
+      <label for="s-auto" style="margin:0">有流推上来就自动录制</label></div>
+    <div class="field" style="margin-top:12px"><label>录像分段时长（分钟，0 表示不分段）</label>
+      <input type="number" id="s-seg" min="0" max="720" value="${s.record_segment_minutes || 0}"></div>
+    <div class="field"><label>对外访问地址（用于生成播放链接，如 http://192.168.1.10:8080）</label>
+      <input type="text" id="s-public" value="${esc(s.public_base || '')}" placeholder="留空则按当前访问地址自动推断"></div>
+    <div class="row2">
+      <div class="field"><label>SRS API 地址（内部）</label><input type="text" id="s-srs" value="${esc(s.srs_api || '')}"></div>
+      <div class="field"><label>本地 RTMP 基地址</label><input type="text" id="s-rtmp" value="${esc(s.rtmp_base || '')}"></div>
+    </div>
+    <div class="field"><label>对外推流地址（容器端口映射后的真实地址，如 rtmp://192.168.1.10:19351/）</label>
+      <input type="text" id="s-rtmp-pub" value="${esc(s.rtmp_public || '')}" placeholder="${esc(s.rtmp_base || 'rtmp://127.0.0.1:1935/')}">
+      <div class="hint">容器内 SRS 监听 1935，但宿主机常映射成别的端口（如 19351）。这里填用户实际推流用的地址，控制台会原样显示给用户，避免推错端口。</div></div>
+    <div class="field"><label>SRS 播放服务地址（内部，HTTP-FLV/HLS，控制台会对其反代）</label>
+      <input type="text" id="s-http" value="${esc(s.srs_http || '')}">
+      <div class="hint">默认 http://127.0.0.1:8080。预览与 HLS/FLV 都经控制台的 1986 端口转发，因此无需对外暴露 8080。</div></div>
+    <button class="btn primary" onclick="saveSettings()">保存设置</button>`;
+}
+
+async function saveSettings() {
+  try {
+    await api('/settings', {
+      method: 'PUT', body: {
+        auto_record: document.getElementById('s-auto').checked,
+        record_segment_minutes: Number(document.getElementById('s-seg').value) || 0,
+        public_base: document.getElementById('s-public').value.trim(),
+        srs_api: document.getElementById('s-srs').value.trim(),
+        srs_http: document.getElementById('s-http').value.trim(),
+        rtmp_public: document.getElementById('s-rtmp-pub').value.trim(),
+        rtmp_base: document.getElementById('s-rtmp').value.trim(),
+      },
+    });
+    toast('设置已保存'); loadAll(false);
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+// ---------- 通用弹窗 ----------
+function openModal(title, bodyHTML, onOk, size) {
+  const root = document.getElementById('modal-root');
+  root.innerHTML = `<div class="modal-mask"><div class="modal ${size || ''}">
+      <header><h3>${esc(title)}</h3><div class="spacer" style="flex:1"></div>
+        <button class="btn sm" id="m-close">关闭</button></header>
+      <div class="body">${bodyHTML}</div>
+      ${onOk ? `<div class="foot"><button class="btn" id="m-cancel">取消</button>
+        <button class="btn primary" id="m-ok">保存</button></div>` : ''}
+    </div></div>`;
+  const wrap = root.firstElementChild;
+  const modal = {
+    el: wrap.querySelector('.modal'),
+    querySelector: sel => wrap.querySelector(sel),
+    querySelectorAll: sel => wrap.querySelectorAll(sel),
+    onClose: null,
+    close() { root.innerHTML = ''; if (modal.onClose) modal.onClose(); },
+  };
+  wrap.querySelector('#m-close').onclick = () => modal.close();
+  const cancel = wrap.querySelector('#m-cancel');
+  if (cancel) cancel.onclick = () => modal.close();
+  wrap.addEventListener('click', e => { if (e.target === wrap) modal.close(); });
+  const ok = wrap.querySelector('#m-ok');
+  if (ok) ok.onclick = async () => {
+    ok.disabled = true;
+    try { if (await onOk()) modal.close(); } catch (e) { toast('保存失败: ' + e.message, true); }
+    finally { ok.disabled = false; }
+  };
+  return modal;
+}
+
+// ---------- 启动 ----------
+document.getElementById('tabs').addEventListener('click', e => {
+  const b = e.target.closest('button[data-tab]');
+  if (!b) return;
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('p-' + b.dataset.tab).classList.add('active');
+});
+
+loadAll(false);
+</script>
+</body>
+</html>

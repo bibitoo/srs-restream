@@ -1,0 +1,11 @@
+# 构建上下文里不需要的文件
+.git
+.gitignore
+data/
+build/srs-src/.git
+control/srs-control
+control/.go
+*.log
+*.mp4
+*.flv
+docs/

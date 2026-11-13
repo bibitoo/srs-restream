@@ -1,0 +1,36 @@
+services:
+  srs-restream:
+    image: srs-restream:1.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: srs-restream
+    restart: unless-stopped
+    # SRS 要求 连接数*1.128+128 <= nofile，容器默认 ulimit 可能偏低
+    # 让容器内可以用 host.docker.internal 访问宿主机上的服务（推流目标常用）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    ports:
+      - "1935:1935"   # RTMP 推流 / 拉流
+      - "8080:8080"   # HTTP-FLV / HLS / 播放器页
+      - "1985:1985"   # SRS 原生 HTTP API
+      - "1986:1986"   # 控制台 + 业务 API
+    environment:
+      TZ: Asia/Shanghai
+      DATA_DIR: /data
+      # 对外暴露时建议开启鉴权：
+      # AUTH_TOKEN: "改成你的token"
+      # 生成播放/推流链接用的对外地址（不填则按访问地址推断）：
+      # PUBLIC_BASE: "http://192.168.1.10:8080"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:1986/api/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
