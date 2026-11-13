@@ -1,0 +1,56 @@
+services:
+  # ---------------- SRS 推流服务器 ----------------
+  srs:
+    build:
+      context: ./srs
+    image: jietu/srs:8.0.74
+    container_name: jetstream-srs
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    ports:
+      - "${SRS_RTMP_PORT:-1935}:1935"   # RTMP 推流 / 拉流
+      - "${SRS_HTTP_PORT:-8080}:8080"   # HTTP-FLV / HLS / 播放器（可选）
+      - "${SRS_API_PORT:-1985}:1985"    # SRS 原生 API（可选，调试用）
+    environment:
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:1985/api/v1/versions"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # ---------------- 控制面：转推 / 混流 / 录制 / 控制台 ----------------
+  control:
+    build:
+      context: ./control
+    image: jietu/srs-restream-control:1.0.0
+    container_name: jetstream-control
+    restart: unless-stopped
+    depends_on:
+      srs:
+        condition: service_started
+    ports:
+      - "${UI_PORT:-1986}:1986"         # 控制台 + 业务 API + 预览（已反代 FLV/HLS）
+    environment:
+      TZ: Asia/Shanghai
+      DATA_DIR: /data
+      # 容器网络内访问 SRS
+      SRS_API: http://srs:1985
+      SRS_HTTP_BASE: http://srs:8080
+      RTMP_BASE: rtmp://srs:1935/
+      # 给用户看的对外推流地址（主机名会按访问地址自动替换，端口取自下面的映射）
+      PUBLIC_RTMP: rtmp://127.0.0.1:${SRS_RTMP_PORT:-1935}/
+      # 对外播放地址，留空则由浏览器当前访问地址拼（推荐留空）
+      PUBLIC_BASE: ""
+    volumes:
+      - "${JETDESK_PROJECT_ROOT}/data:/data"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:1986/api/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

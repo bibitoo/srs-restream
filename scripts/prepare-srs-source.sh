@@ -44,6 +44,16 @@ rsync -a --delete \
   --exclude '/trunk/3rdparty/openssl-OpenSSL_1_0_2u.tar.gz' \
   "$SRS_SRC/" "$DST/"
 
+# research/api-server/static-dir 里是仓库内的相对符号链接（favicon.ico / index.html），
+# docker 构建上下文与 tar 都不跟随符号链接，会让 configure 阶段的 cp 直接失败。
+# 这里替换成实体副本。
+for f in trunk/research/api-server/static-dir/favicon.ico trunk/research/api-server/static-dir/index.html; do
+  if [ -L "$DST/$f" ]; then
+    cp -L "$DST/$f" "$DST/.tmp.$$" && mv "$DST/.tmp.$$" "$DST/$f"
+    echo "  已实体化符号链接: $f"
+  fi
+done
+
 # 记录源码版本，方便追溯镜像来源
 VERSION="$(cd "$SRS_SRC" && git describe --tags --always 2>/dev/null || true)"
 printf '%s\n' "${VERSION:-unknown}" > "$DST/SRS_VERSION.txt"

@@ -1,0 +1,10 @@
+{
+  "id": "ad9a7968-08f2-4e3a-a542-2cacc2ec445d",
+  "name": "捷兔流媒体服务",
+  "type": "compose",
+  "workDir": "jetstream",
+  "endpointPort": 1986,
+  "localEndpointPort": 1986,
+  "version": "1.0.0",
+  "description": "基于 SRS 的推流服务器：接收 RTMP 推流，支持转推第三方平台、多路混流（宫格/画中画/圆窗口）、自动录制与录像回放。"
+}

@@ -1,5 +1,8 @@
 # 构建产物
 build/srs-src/
+build/jet/
+jetbuild/
+build/*.jet
 control/srs-control
 
 # 运行时数据（录像、配置、日志）

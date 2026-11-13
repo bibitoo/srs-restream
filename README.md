@@ -38,6 +38,17 @@
 
 > 单流转推与混流转推的差别只在「要不要合成」：单路走 copy 零转码，多路走 x264 合成。
 
+## 交付形态
+
+| 形态 | 入口 | 适用 |
+| --- | --- | --- |
+| 单容器（默认） | `Dockerfile` + `docker-compose.yml` | 自有服务器部署，SRS 与控制面同容器 |
+| 双容器 | `jet/` 下的 `srs/` + `control/` 与 compose | 想独立升级 SRS，或与其它服务编排 |
+| **捷兔桌面软件包** | `scripts/build-jet.sh` → `*.jet` | 终端用户双击安装，自带控制台与说明书 |
+
+`.jet` 包内容见 `jet/`（jdconfig、compose、两个 Dockerfile、包内说明书），
+打包后约 7.9MB（含 SRS 源码，首次安装在本机编译，约 3~5 分钟）。
+
 ## 快速开始
 
 ### 1. 构建镜像
@@ -381,8 +392,18 @@ node scripts/test-ui-refresh.js    # 或 make test-ui
 │   ├── jobs.go                # 任务调度：编码器 + 每目标中继 + 重连
 │   ├── record.go              # 录制、收尾转封装、录像列表
 │   └── web/index.html         # 单页控制台（内嵌进二进制）
+├── jet/                       # 捷兔桌面 .jet 包模板（双容器编排）
+│   ├── jdconfig               # 清单：type=compose，endpointPort=1986
+│   ├── docker-compose.yml     # srs + control 两个服务
+│   ├── srs/                   # SRS 引擎镜像（Dockerfile + srs.conf + 源码由脚本注入）
+│   ├── control/               # 控制面镜像（Dockerfile + entrypoint）
+│   └── help/index.md          # 包内使用说明书
+├── docs/
+│   └── trail-app-settings.md  # 捷兔行迹 App 推流设置项（本次改造说明）
 ├── scripts/
 │   ├── prepare-srs-source.sh  # 把 SRS 源码快照为可构建的自包含副本
-│   └── smoke-test.sh          # 端到端自测
+│   ├── build-jet.sh           # 组装并打包 .jet
+│   ├── smoke-test.sh          # 端到端自测
+│   └── test-ui-refresh.js     # 前端刷新逻辑测试
 └── build/srs-src/             # SRS 源码快照（由脚本生成）
 ```
