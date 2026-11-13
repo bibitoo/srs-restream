@@ -1,82 +1,110 @@
-# 捷兔行迹 App · 推流地址的「辅助候选」
+# 捷兔行迹 App · 推流地址发现与登录态
 
-> 原则：**只做辅助，不绑死**。发现到的服务只用来填充候选、顺手补空，用户随时可以改成
-> 任何地址（自建服务、第三方平台都行）。原有设置项一个都没删，也没有新增强制项。
+> 原则：**发现只做辅助**。候选仅用于填充与提示，用户随时可改成任何地址；
+> 原设置项一个没删。注销则相反——**三处必须一起退**。
 
-## 一、用户看到的效果
+## 一、候选的三个来源
 
-打开「设置 → 推流与视频规格」→ 点「RTMP 地址」：
+点「设置 → 推流与视频规格 → RTMP 地址」：
 
 ```
-┌─ RTMP地址 ──────────────────────────────┐
-│ 历史地址 / 候选（点选即可填入）          │
-│ [ 手动输入新地址…                    ▼ ] │
-│  📡 捷兔流媒体服务 · 192.168.1.10        │  ← 局域网发现的
-│  📡 捷兔流媒体服务 · 192.168.1.23        │
-│  ✅ rtmp://192.168.1.10:1935/live/stream │  ← 推流成功过的
-│                                          │
-│ [rtmp://192.168.1.10:1935/live/stream]   │  ← 点这里也会自动展开候选
-│                              清空历史     │
-└──────────────────────────────────────────┘
+手动输入新地址…                          ▼
+📡 捷兔流媒体服务 · 192.168.0.14          ← 局域网扫描 /api/discover
+☁️ 捷兔流媒体服务 · 192.168.0.14          ← 捷兔社区 GET /vapi/agent/apps
+✅ rtmp://192.168.0.14:19351/live/stream  ← 推流成功过（历史）
 ```
 
-- **点输入框**就会展开候选（不用去找下拉箭头）；
-- 📡 项选中后只替换 **IP 与端口**，保留你原来的 app 名和流名（比如 `/live/行车记录` 会保留）；
-- ✅ 项来自 `StreamUrlHistory`——**只有连接成功过才记录**，写错的地址不会进候选；
-- 进入设置页时若地址**还是空的**，用发现的第一个服务静默填一份，并 Toast 提示「已自动填入…（可修改）」；
-  **已经填过的地址不会被覆盖**。
+| 来源 | 实现 | 凭证 | 缓存 |
+| --- | --- | --- | --- |
+| 📡 局域网 | `StreamServiceDiscovery` 扫 /24 网段的 `1986/api/discover`（24 并发、350ms 超时） | 无 | 24 小时 |
+| ☁️ 社区 | `CommunityAppsDiscovery` 调 `GET {社区}/vapi/agent/apps?applicationId=jetool-trail`，再反查每个后端的 `/api/discover` 补 RTMP 端口 | **A 仓**社区 JWT | 10 分钟 |
+| ✅ 历史 | `StreamUrlHistory`（原有，仅连接成功时记录） | 无 | 12 条/协议 |
 
-## 二、候选从哪来
+设置列表页副标题实时显示：`RTMP直播推流地址 ｜ 局域网 1 个 / 社区 1 个，点击选择`
 
-| 来源 | 实现 | 何时更新 |
+## 二、自动填入策略
+
+```java
+shouldAutoFill() = 值为空  ||  偏好里从未保存过这个 key
+```
+
+| 情况 | 行为 |
+| --- | --- |
+| 从没设置过（仅 XML 默认值） | 自动填入第一个发现的服务（Toast 提示可改） |
+| 值为空 | 自动填入 |
+| 用户保存过（哪怕与默认值相同） | **只进候选，不覆盖** |
+
+## 三、登录态：一次 SSO，两仓分存
+
+```
+A 仓（社区）  JetDeskSharedSession.read()
+              content://cn.jetool.commune.jetdesk.session/session
+              → 社区 JWT + baseUrl
+              用途：/vapi/agent/apps 等社区接口
+
+B 仓（行迹）  AuthStore / jietu_auth
+              → 行迹 access/refresh token
+              用途：行迹自己的后台（/api/v1/tracks…）
+```
+
+用户在捷兔社区 App 登录一次即可，两边**各存各的、各取各的**：社区 token 不能打行迹后台，反之亦然。
+
+## 四、注销：三处齐退（`LogoutHelper.logoutAll`）
+
+| 身份 | 存放 | 动作 |
 | --- | --- | --- |
-| 📡 局域网发现 | `StreamServiceDiscovery` 扫本机所在 /24 网段的 `1986/api/discover` | 每次打开设置页、每次打开地址对话框各扫一次（后台，1~2 秒） |
-| ✅ 推流成功地址 | `StreamUrlHistory`（原有） | 推流连接成功后立即记录，最多 12 条/协议 |
+| 行迹令牌（B 仓） | `AuthStore` | `AuthStore.clear()` |
+| 社区会话（A 仓） | jetdesk-discovery 组件 | `JetDeskLink.logout()`（同时停轮询） |
+| 统一账号 SSO | Casdoor 会话 cookie | `GET {ssoBase}/api/logout` |
 
-发现结果缓存 24 小时（`stream_discovery` 偏好文件），断网也能出候选；过期自动失效，不需要手动清。
+执行顺序（顺序错了服务端会话就退不掉）：
 
-## 三、服务端配合
-
-控制面新增只读端点，供局域网客户端发现（不需要鉴权）：
-
-```
-GET http://<ip>:1986/api/discover
-{
-  "service": "jetstream",
-  "name": "捷兔流媒体服务",
-  "version": "1.0.0",
-  "srs_version": "8.0.74",
-  "rtmp_base": "rtmp://192.168.1.10:1935/live/",   // 按请求方看到的 Host 拼装
-  "rtmp_port": "1935",
-  "ui": "http://192.168.1.10:1986",
-  "auto_record": true
-}
+```java
+String ssoBase   = AuthStore.ssoBase(app);    // ① 先按值取出
+String ssoCookie = AuthStore.ssoCookie(app);  //    （clear() 会连带清掉）
+AuthStore.clear(app);                         // ② 清行迹本地
+JetDeskLink.logout();                         // ③ 退社区会话
+new Thread(() -> SsoClient.logoutSso(ssoBase, ssoCookie)).start();  // ④ SSO /api/logout
+StreamServiceDiscovery.clear(app);            // ⑤ 清发现缓存
+CommunityAppsDiscovery.clear(app);
 ```
 
-`rtmp_base` 用请求的 Host + 配置的 RTMP 端口拼装，所以手机/PC 在局域网里拿到的都是**可直接推的地址**。
-`.jet` 包已包含该端点。
+所有注销入口都走它：账号页、轨迹列表页（后者原先只清了本地，漏掉组件与 SSO）。
 
-## 四、改动文件
+## 五、applicationId 必须逐字一致
 
 ```
-新增 app/src/main/java/cn/jetool/trail/app/stream/StreamServiceDiscovery.java
-       局域网扫描 + 缓存 + 异步回调（TCP 350ms 超时，24 并发，扫完约 1~2 秒）
-
-修改 app/src/main/java/cn/jetool/trail/app/stream/StreamUrlPreference.java
-       候选改为「📡 发现的服务 + ✅ 成功过的地址」；点输入框自动展开；
-       进入设置页时仅当地址为空才自动填入
-
-修改 app/src/main/res/values/strings_stream.xml        +3 条（📡 / ✅ / 自动填入提示）
-修改 app/src/main/res/values-zh/strings_stream.xml     +3 条
-
-未改动：preferences_streaming.xml、preferences_headers.xml、SettingsFragment.java、
-        TTS 相关全部文件、StreamUrlHistory.java、推流管线
+jdconfig.applicationIds = ["jetool-trail"]
+JetDeskLink.APPLICATION_ID = "jetool-trail"     ← 组件常量
+CommunityAppsDiscovery.APPLICATION_ID = JetDeskLink.APPLICATION_ID
 ```
 
-## 五、验证要点
+差一个字符（如写成 `jetooltrail`）不会报错，只是**永远发现不到**。
 
-1. 手机与电脑（跑着捷兔流媒体服务）在同一 Wi-Fi，打开设置 → 地址框候选里出现「📡 捷兔流媒体服务 · <电脑IP>」；
-2. 点该候选项 → 地址变成 `rtmp://<电脑IP>:1935/live/<原流名>`；
-3. 推流成功后该地址出现在「✅」组；
-4. 手动改成别的地址（如第三方平台）→ 保存生效，下次进设置页**不会被自动填回发现的服务**；
-5. 没有局域网服务且没有历史时，候选区显示「还没有推流成功过的地址，直接输入即可」。
+## 六、改动文件
+
+```
+新增  jietu/LogoutHelper.java                三处齐退的统一入口
+新增  stream/StreamServiceDiscovery.java     局域网扫描 + 缓存
+新增  stream/CommunityAppsDiscovery.java     社区发现（A 仓凭证）
+修改  stream/StreamUrlPreference.java        三类候选 / 自动填策略 / 双来源 summary
+修改  jietu/JetDeskSharedSession.java        Session 增加 baseUrl
+修改  jietu/SettingsFragment.java            注销改调 LogoutHelper
+修改  ui/TrackListActivity.java              注销补上组件与 SSO（原来漏了）
+修改  res/values(-zh)/strings_stream.xml     新增候选与状态文案
+未动  preferences_streaming.xml / TTS 全套 / StreamUrlHistory / 推流管线
+```
+
+## 七、排障
+
+```bash
+adb logcat -s CommunityApps JetoolTrailLink
+```
+
+| 日志 | 含义 |
+| --- | --- |
+| `无社区登录态，跳过社区发现` | 社区 App 未装 / 未登录 / 签名不同 |
+| `parse failed` | 社区返回结构变化 |
+| `fetch failed` | 网络或社区基址问题 |
+
+服务端自检：浏览器打开 `http://<后端IP>:1986/api/discover`，能看到 `"service":"jetstream"` 即可。
