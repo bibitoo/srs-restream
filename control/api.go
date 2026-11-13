@@ -775,6 +775,12 @@ func (a *API) handleSettings(w http.ResponseWriter, r *http.Request) {
 //
 // 必须幂等：桌面会每 2 秒重试一次，同一份内容重复 POST 结果一致。
 func (a *API) handleJetDeskConfig(w http.ResponseWriter, r *http.Request) {
+	// GET 作为健康探针：规范里 healthPath 取自 configPath，App 会用 GET 打这里。
+	// 只回 ok，不泄露任何配置，因此免鉴权；POST 仍要密钥。
+	if r.Method == http.MethodGet {
+		writeJSON(w, 200, map[string]interface{}{"ok": true, "service": "jetstream"})
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, errors.New("只接受 POST"))
 		return
