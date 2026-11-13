@@ -5,7 +5,7 @@
   "workDir": "jetstream",
   "endpointPort": 1986,
   "localEndpointPort": 1986,
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "基于 SRS 的推流服务器：接收 RTMP 推流，支持转推第三方平台、多路混流（宫格/画中画/圆窗口）、自动录制与录像回放。",
   "applicationIds": [
     "jetool-trail"
@@ -20,5 +20,186 @@
         "configToken": "jetool"
       }
     }
+  },
+  "agent": {
+    "title": "捷兔流媒体服务",
+    "summary": "推流、转推、混流、录像",
+    "tools": [
+      {
+        "description": "列出当前 SRS 上的所有流（含混流产生的 mix/*）：名称、是否在推流、分辨率、码率、是否正在录制。",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "streams_list",
+        "path": "/api/agent/streams",
+        "title": "列出直播流"
+      },
+      {
+        "description": "列出所有转推任务及其运行状态、每个第三方目标的推送状态与重连次数。",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "jobs_list",
+        "path": "/api/agent/jobs",
+        "title": "列出转推任务"
+      },
+      {
+        "description": "创建一条转推任务。mode=direct 为单流转推（不转码）；mode=mix 为多流混流后转推，layout 可选 vstack(上下)/hstack(左右)/grid(宫格)/pip(画中画)/circle(圆窗口)。targets 填第三方 RTMP 推流地址数组。创建后默认不自动启动，需再调 job_start。",
+        "inputSchema": {
+          "properties": {
+            "fps": {
+              "description": "帧率，默认 25",
+              "type": "integer"
+            },
+            "height": {
+              "description": "输出高，默认 720",
+              "type": "integer"
+            },
+            "layout": {
+              "description": "混流布局：vstack/hstack/grid/pip/circle，mix 模式有效",
+              "type": "string"
+            },
+            "mode": {
+              "description": "direct 或 mix",
+              "type": "string"
+            },
+            "name": {
+              "description": "任务名",
+              "type": "string"
+            },
+            "pip_size": {
+              "description": "画中画/圆窗直径占宽百分比，默认 28",
+              "type": "integer"
+            },
+            "sources": {
+              "description": "源流列表，如 [\"live/camera01\"]",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "targets": {
+              "description": "第三方 RTMP 地址数组",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "width": {
+              "description": "输出宽，默认 1280",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "mode",
+            "sources"
+          ],
+          "type": "object"
+        },
+        "method": "POST",
+        "mutating": true,
+        "name": "job_create",
+        "path": "/api/agent/jobs",
+        "timeoutSeconds": 30,
+        "title": "创建转推任务"
+      },
+      {
+        "description": "启动指定任务；源流不在线时会进入「等待源流」状态，源流上线后自动开始推。",
+        "inputSchema": {
+          "properties": {
+            "id": {
+              "description": "任务 ID",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "method": "POST",
+        "mutating": true,
+        "name": "job_start",
+        "path": "/api/agent/job/start",
+        "title": "启动转推任务"
+      },
+      {
+        "description": "停止指定任务（会同时停掉它对所有第三方目标的中继）。",
+        "inputSchema": {
+          "properties": {
+            "id": {
+              "description": "任务 ID",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "method": "POST",
+        "mutating": true,
+        "name": "job_stop",
+        "path": "/api/agent/job/stop",
+        "title": "停止转推任务"
+      },
+      {
+        "description": "列出录像文件：流名、时长、大小、是否正在录制、是否需要修复。",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "recordings_list",
+        "path": "/api/agent/recordings",
+        "title": "列出录像"
+      },
+      {
+        "description": "对指定流开始录制；即使该流当前离线也会挂着，等流上线后自动写入文件。",
+        "inputSchema": {
+          "properties": {
+            "stream": {
+              "description": "流名，如 live/camera01",
+              "type": "string"
+            }
+          },
+          "required": [
+            "stream"
+          ],
+          "type": "object"
+        },
+        "method": "POST",
+        "mutating": true,
+        "name": "recording_start",
+        "path": "/api/agent/recording/start",
+        "title": "开始录制"
+      },
+      {
+        "description": "停止指定录像并自动封装成可播放的 MP4。",
+        "inputSchema": {
+          "properties": {
+            "id": {
+              "description": "录像 ID",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "method": "POST",
+        "mutating": true,
+        "name": "recording_stop",
+        "path": "/api/agent/recording/stop",
+        "timeoutSeconds": 60,
+        "title": "停止录制"
+      }
+    ]
   }
 }

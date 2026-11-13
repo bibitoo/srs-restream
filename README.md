@@ -268,6 +268,58 @@ SRS 的 `http_hooks` 会在推流上线/下线时回调 `/hooks/on_publish`、`/
 
 录像写入时使用分片 MP4（断电/强制停止也不丢），停止后自动转封装成 `faststart` 标准 MP4，浏览器拖动进度条无需等待。
 
+## MCP 支持（让 AI 直接操作流媒体）
+
+两种接入方式，工具定义同源（`control/agent.go`），行为一致：
+
+### 方式一：通过捷兔桌面（推荐，零配置）
+
+`jdconfig` 已声明 `agent.tools[]`（8 个工具）。捷兔桌面把这些工具以 `<服务slug>__<name>`
+暴露给它托管的 MCP，本机 AI 客户端（Cursor / Claude Desktop / Cline）连桌面即可用，
+不用你填任何地址。
+
+### 方式二：直连内置 MCP 端点（不经过桌面）
+
+控制面内置 MCP（Streamable HTTP），在 `POST /mcp` 上跑 JSON-RPC：
+
+```jsonc
+// Cursor / Claude Desktop 的 mcpServers 配置
+{
+  "mcpServers": {
+    "jetstream": {
+      "url": "http://192.168.1.10:1986/mcp",
+      "headers": { "Authorization": "Bearer jetool" }   // 访问密钥
+    }
+  }
+}
+```
+
+支持 `initialize` / `notifications/initialized` / `tools/list` / `tools/call` / `ping`，
+协议版本 `2024-11-05`。`GET /mcp` 返回服务与工具数量，可用于探活。
+
+### 工具清单
+
+""" + tools_desc + """
+
+### 调试
+
+```bash
+# 列工具
+curl -s -X POST http://127.0.0.1:1986/mcp -H 'Authorization: Bearer jetool' \
+  -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+# 调工具
+curl -s -X POST http://127.0.0.1:1986/mcp -H 'Authorization: Bearer jetool' \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"streams_list","arguments":{}}}'
+
+# 导出 agent 段（核对 jdconfig 用）
+curl -s -H 'Authorization: Bearer jetool' http://127.0.0.1:1986/api/agent-manifest
+```
+
+同一套能力也以普通 REST 暴露在 `/api/agent/...`（固定路径，参数走 query/body），
+供桌面按 `agent.tools[].path` 直接调用。
+
 ## 安全访问防卫（访问密钥）
 
 服务默认**开启访问密钥**，初始值 `jetool`，覆盖范围包括控制面 API、预览反代、SRS 推流。

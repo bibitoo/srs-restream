@@ -76,6 +76,8 @@ func main() {
 	mux.HandleFunc("/hooks/", api.hookRouter)
 	// 捷兔桌面推配置（协议 B 面）：接口内部用访问密钥校验，可覆盖密钥
 	mux.HandleFunc("/jetdesk/config", api.handleJetDeskConfig)
+	// 内置 MCP 端点（Streamable HTTP）：供 Cursor / Claude Desktop 等直连
+	mux.HandleFunc("/mcp", api.handleMCP)
 	// 录像的 HLS 切片（手机/微信兼容播放）
 	hlsDir := filepath.Join(dataDir, "hls")
 	_ = ensureDir(hlsDir)
@@ -216,6 +218,15 @@ func (a *API) router(w http.ResponseWriter, r *http.Request) {
 		}
 	case "settings":
 		a.handleSettings(w, r)
+	case "agent-manifest":
+		a.handleAgentManifest(w, r)
+	case "agent":
+		// /api/agent/<path> 按工具声明里的固定 path 匹配，参数走 query / JSON body
+		if strings.Trim(rest, "/") == "" {
+			writeErr(w, 404, errNotFound)
+			return
+		}
+		a.handleAgentTool("/api/agent/"+rest)(w, r)
 	default:
 		writeErr(w, 404, errNotFound)
 	}
