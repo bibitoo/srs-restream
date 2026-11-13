@@ -93,6 +93,7 @@
 <header>
   <div class="brand"><span class="dot" id="dot"></span> SRS 转推控制台 <span class="ver" id="ver"></span></div>
   <div class="stats" id="stats"></div>
+  <button class="btn" onclick="changeKey()" title="服务访问密钥（桌面可覆盖）">密钥</button>
   <button class="btn" onclick="loadAll(true)">刷新</button>
 </header>
 
@@ -160,16 +161,54 @@
 
 <script>
 const S = { streams: [], jobs: [], targets: [], recordings: [], layouts: [], settings: {}, overview: {}, autoRecord: true };
+
+// ---- 访问密钥（服务端安全访问防卫）----
+// 初始 "jetool"；桌面可通过 POST /jetdesk/config 覆盖，之后这里要用新值。
+const KEY_STORE = 'jetstream_key';
+let ACCESS_KEY = localStorage.getItem(KEY_STORE) || '';
+
+function setAccessKey(k) {
+  ACCESS_KEY = k || '';
+  if (ACCESS_KEY) {
+    localStorage.setItem(KEY_STORE, ACCESS_KEY);
+    // 存 cookie：<video>、iframe 播放器页、HLS 分片等无法加请求头，靠它携带
+    document.cookie = 'jsk=' + encodeURIComponent(ACCESS_KEY) + '; path=/; max-age=31536000; SameSite=Lax';
+  } else {
+    localStorage.removeItem(KEY_STORE);
+    document.cookie = 'jsk=; path=/; max-age=0';
+  }
+}
+
+// 把 key 拼到 URL（播放/推流地址用）
+function withKey(url) {
+  if (!ACCESS_KEY) return url;
+  return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'key=' + encodeURIComponent(ACCESS_KEY);
+}
+
+// 401 时弹密钥输入框
+function askAccessKey(msg) {
+  const v = prompt((msg || '需要访问密钥') + '\n\n请输入访问密钥（初始为 jetool，可由捷兔桌面覆盖）：', ACCESS_KEY || '');
+  if (v === null) return false;
+  setAccessKey(v.trim());
+  return true;
+}
 let refreshTimer = null;
 
-async function api(path, opts = {}) {
+async function api(path, opts = {}, retried) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (ACCESS_KEY) headers['X-Access-Key'] = ACCESS_KEY;
   const res = await fetch('/api' + path, {
     method: opts.method || 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headers,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   let data = null;
   try { data = await res.json(); } catch (e) {}
+  if (res.status === 401) {
+    // 密钥不对/没填：提示一次，用户输入后重试
+    if (!retried && askAccessKey('访问密钥无效')) return api(path, opts, true);
+    throw new Error('未授权：访问密钥无效');
+  }
   if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
   return data;
 }
@@ -271,8 +310,10 @@ async function loadAll(manual) {
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => {
     // 页面在后台时不刷新，避免无谓的重绘
-    if (document.hidden) { loadAll(false); return; }
-    loadAll(false);
+    if (document.hidden) { // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false); return; }
+    // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false);
   }, 5000);
 }
 
@@ -294,7 +335,7 @@ function playerURL(app, stream, suffix) {
   const base = (S.settings.public_base || location.origin).replace(/\/$/, '');
   const tail = (suffix === undefined) ? '.flv' : suffix;
   const q = 'autostart=true&schema=http&app=' + encodeURIComponent(app) + '&stream=' + encodeURIComponent(stream) + tail;
-  return base + '/players/srs_player.html?' + q;
+  return withKey(base + '/players/srs_player.html?' + q);
 }
 // 推流基地址：优先用「对外推流地址」（端口映射后的真实地址）
 function rtmpBase() {
@@ -308,8 +349,8 @@ function rtmpBase() {
 function streamURLs(app, stream) {
   const base = (S.settings.public_base || '').replace(/\/$/, '');
   return {
-    flv: base + '/' + app + '/' + stream + '.flv',
-    hls: base + '/' + app + '/' + stream + '.m3u8',
+    flv: withKey(base + '/' + app + '/' + stream + '.flv'),
+    hls: withKey(base + '/' + app + '/' + stream + '.m3u8'),
   };
 }
 let fpStreams = '';
@@ -317,7 +358,7 @@ function renderStreams(force) {
   const box = document.getElementById('streams-box');
   const list = S.streams;
   const hint = document.getElementById('push-hint');
-  if (hint) hint.textContent = rtmpBase() + 'live/流名';
+  if (hint) hint.textContent = rtmpBase() + 'live/流名' + (ACCESS_KEY ? '?key=' + ACCESS_KEY : '');
   // 内容没变就不重建表格，避免刷新时按钮/交互被打断
   const fp = list.map(x => [x.key, x.active ? 1 : 0, x.video, x.kbps_recv, x.clients,
     x.recording ? x.recording.id + '@' + Math.floor(x.recording.duration / 5) : '-'].join(':')).join('|');
@@ -325,7 +366,7 @@ function renderStreams(force) {
   fpStreams = fp;
   document.getElementById('stream-hint').textContent = S.overview.srs_error ? ('SRS API 异常：' + S.overview.srs_error) : '';
   if (!list.length) {
-    box.innerHTML = `<div class="empty">暂无流。用 OBS/ffmpeg 推流到 <code>${esc(rtmpBase())}live/流名</code> 即可看到。<br>
+    box.innerHTML = `<div class="empty">暂无流。用 OBS/ffmpeg 推流到 <code>${esc(rtmpBase())}live/流名${ACCESS_KEY ? '?key=' + esc(ACCESS_KEY) : ''}</code> 即可看到。<br>
       <span class="muted" style="font-size:12px">若推流后这里仍是空的：确认推流地址的端口与本页提示一致（容器端口映射后可能与 1935 不同）。</span></div>`;
     return;
   }
@@ -363,7 +404,8 @@ async function startRecord(key) {
       toast('已开始录制 ' + key + '，文件见「录像库」');
     }
     recFingerprint = '';   // 强制刷新录像库
-    loadAll(false);
+    // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false);
   } catch (e) { toast('录制失败: ' + e.message, true); }
 }
 
@@ -374,7 +416,8 @@ async function stopStreamRecord(id, key) {
     await api('/recordings/' + encodeURIComponent(id) + '/stop', { method: 'POST' });
     toast('已停止录制，正在封装…');
     recFingerprint = '';
-    loadAll(false);
+    // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false);
     setTimeout(() => loadAll(false), 2500);
   } catch (e) { toast('停止失败: ' + e.message, true); }
 }
@@ -388,7 +431,8 @@ function openManualRecord() {
     const stream = document.getElementById('mr-stream').value.trim();
     if (!stream) { toast('请填写流名', true); return false; }
     await api('/recordings', { method: 'POST', body: { stream } });
-    toast('已开始录制'); loadAll(false); return true;
+    toast('已开始录制'); // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false); return true;
   });
 }
 
@@ -473,13 +517,15 @@ async function jobAction(id, action) {
     const r = await api('/jobs/' + id + '/' + action, { method: 'POST' });
     if (r && r.status === 'waiting') toast('任务已启动，正在等待源流上线');
     else toast('操作成功');
-    loadAll(false);
+    // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false);
   } catch (e) { toast('操作失败: ' + e.message, true); }
 }
 
 async function delJob(id, name) {
   if (!confirm('删除任务「' + name + '」？正在运行的会被停止。')) return;
-  try { await api('/jobs/' + id, { method: 'DELETE' }); toast('已删除'); loadAll(false); }
+  try { await api('/jobs/' + id, { method: 'DELETE' }); toast('已删除'); // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false); }
   catch (e) { toast('删除失败: ' + e.message, true); }
 }
 
@@ -617,7 +663,8 @@ async function openJobModal(id, presetSource) {
     if (job) await api('/jobs/' + job.id, { method: 'PUT', body: payload });
     else await api('/jobs', { method: 'POST', body: payload });
     toast(job ? '已保存' : '任务已创建');
-    loadAll(false);
+    // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false);
     return true;
   }, 'wide');
 
@@ -707,13 +754,15 @@ function openTargetModal(id) {
     }
     if (id) await api('/targets/' + id, { method: 'PUT', body: payload });
     else await api('/targets', { method: 'POST', body: payload });
-    toast('已保存'); loadAll(false); return true;
+    toast('已保存'); // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false); return true;
   });
 }
 
 async function delTarget(id, name) {
   if (!confirm('删除推流地址「' + name + '」？引用它的任务将失去目标。')) return;
-  try { await api('/targets/' + id, { method: 'DELETE' }); toast('已删除'); loadAll(false); }
+  try { await api('/targets/' + id, { method: 'DELETE' }); toast('已删除'); // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false); }
   catch (e) { toast('删除失败: ' + e.message, true); }
 }
 
@@ -861,22 +910,26 @@ async function repairRec(btn, id) {
   try {
     const m = await api('/recordings/' + encodeURIComponent(id) + '/repair', { method: 'POST' });
     toast('修复完成，时长 ' + fmtDur(m.duration));
-    loadAll(false);
+    // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false);
   } catch (e) {
     toast('修复失败: ' + e.message, true);
-    loadAll(false);
+    // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false);
   }
 }
 
 async function stopRecord(id) {
   recLastInteract = 0;
-  try { await api('/recordings/' + encodeURIComponent(id) + '/stop', { method: 'POST' }); toast('已停止录制'); loadAll(false); }
+  try { await api('/recordings/' + encodeURIComponent(id) + '/stop', { method: 'POST' }); toast('已停止录制'); // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false); }
   catch (e) { toast('操作失败: ' + e.message, true); }
 }
 async function delRec(id, file) {
   recLastInteract = 0;
   if (!confirm('删除录像 ' + file + '？此操作会删除文件。')) return;
-  try { await api('/recordings/' + encodeURIComponent(id), { method: 'DELETE' }); toast('已删除'); loadAll(false); }
+  try { await api('/recordings/' + encodeURIComponent(id), { method: 'DELETE' }); toast('已删除'); // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false); }
   catch (e) { toast('删除失败: ' + e.message, true); }
 }
 
@@ -924,7 +977,8 @@ async function saveSettings() {
         rtmp_base: document.getElementById('s-rtmp').value.trim(),
       },
     });
-    toast('设置已保存'); loadAll(false);
+    toast('设置已保存'); // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
+loadAll(false);
   } catch (e) { toast('保存失败: ' + e.message, true); }
 }
 
@@ -959,6 +1013,10 @@ function openModal(title, bodyHTML, onOk, size) {
   return modal;
 }
 
+function changeKey() {
+  if (askAccessKey('修改访问密钥')) { toast('密钥已更新'); loadAll(true); }
+}
+
 // ---------- 启动 ----------
 document.getElementById('tabs').addEventListener('click', e => {
   const b = e.target.closest('button[data-tab]');
@@ -969,6 +1027,7 @@ document.getElementById('tabs').addEventListener('click', e => {
   document.getElementById('p-' + b.dataset.tab).classList.add('active');
 });
 
+// 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
 loadAll(false);
 </script>
 </body>

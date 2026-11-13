@@ -268,6 +268,54 @@ SRS 的 `http_hooks` 会在推流上线/下线时回调 `/hooks/on_publish`、`/
 
 录像写入时使用分片 MP4（断电/强制停止也不丢），停止后自动转封装成 `faststart` 标准 MP4，浏览器拖动进度条无需等待。
 
+## 安全访问防卫（访问密钥）
+
+服务默认**开启访问密钥**，初始值 `jetool`，覆盖范围包括控制面 API、预览反代、SRS 推流。
+
+### 密钥从哪来、怎么改
+
+| 时机 | 行为 |
+| --- | --- |
+| 首次启动 | 默认 `jetool`（可用环境变量 `ACCESS_KEY` 覆盖） |
+| 捷兔桌面推配置 | `POST /jetdesk/config`，用**当前密钥**校验；body 里带 `accessKey` 则**覆盖**为新值 |
+| 之后 | 新密钥成为所有访问的唯一凭据，旧密钥立即失效 |
+
+```http
+POST /jetdesk/config
+X-JetDesk-Key: jetool          ← 也可用 Authorization: Bearer / X-Access-Key / ?key=
+Content-Type: application/json
+
+{"self":"app","accessKey":"新密钥","instanceId":"d-xxx:jetsream"}
+→ {"ok":true,"keyUpdated":true}
+```
+
+接口**幂等**：同一份内容重复推送结果一致（桌面会每 2 秒重试）。
+
+### 四种携带方式
+
+| 场景 | 写法 |
+| --- | --- |
+| 脚本 / curl | `-H "X-Access-Key: jetool"` 或 `-H "Authorization: Bearer jetool"` |
+| 浏览器控制台 | 首次访问弹框输入一次，存 localStorage + Cookie `jsk`，之后自动携带 |
+| 播放（`<video>`/iframe/HLS 分片） | Cookie `jsk` 自动带；也可在 URL 加 `?key=` |
+| 推流 | `rtmp://host:1935/live/流名?key=jetool` |
+
+### 保护范围
+
+| 入口 | 是否要密钥 |
+| --- | --- |
+| `/api/**`（除下列两个） | ✅ 要 |
+| `/api/health`、`/api/discover` | ⬜ 免（监控与 App 发现，只返回服务名/地址） |
+| 预览反代 `/players/`、`*.flv`、`*.m3u8`、`*.ts` | ✅ 要 |
+| SRS 推流（RTMP 1935） | ✅ 要（控制面 `on_publish` 校验 `?key=`，不匹配直接拒绝） |
+| SRS 的 8080 / 1985 | ⬜ 不对外暴露（compose 里只 `expose`），外部一律经控制面反代 |
+
+> SRS 配置不支持热重载，所以密钥不写进 `srs.conf`，而是靠"HTTP 端口只给控制面访问 + 推流走 `on_publish` 回调"实现动态生效。
+
+### 关闭防护
+
+设 `ACCESS_KEY=""`（空）即不校验，适合纯内网调试。
+
 ## 容器网络与推流目标地址
 
 容器有独立的网络命名空间，**容器里的 `127.0.0.1` 是容器自己，不是宿主机**。因此：

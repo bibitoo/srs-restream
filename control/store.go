@@ -64,13 +64,16 @@ type Job struct {
 
 // Settings 是全局设置。
 type Settings struct {
-	AutoRecord           bool   `json:"auto_record"`            // 有流推上来就自动录制
-	RecordSegmentMinutes int    `json:"record_segment_minutes"` // 单个录像分段时长，0 表示不分段
-	SRSAPI               string `json:"srs_api"`
-	SRSHTTP              string `json:"srs_http"`    // SRS 的 HTTP 服务地址（HTTP-FLV/HLS/播放器），控制面对其做反代
-	RTMPBase             string `json:"rtmp_base"`   // 容器内推流地址（SRS 监听）
-	RTMPPublic           string `json:"rtmp_public"` // 对外推流地址（端口映射后的真实地址，前端展示用）
-	PublicBase           string `json:"public_base"` // 对外可访问地址，用于生成播放/推流地址
+	AutoRecord           bool `json:"auto_record"`            // 有流推上来就自动录制
+	RecordSegmentMinutes int  `json:"record_segment_minutes"` // 单个录像分段时长，0 表示不分段
+	// AccessKey 是服务访问密钥：控制面所有 API、预览反代、SRS 推流都用它校验。
+	// 初始值 "jetool"，可由桌面通过 POST /jetdesk/config 推送覆盖。
+	AccessKey  string `json:"access_key"`
+	SRSAPI     string `json:"srs_api"`
+	SRSHTTP    string `json:"srs_http"`    // SRS 的 HTTP 服务地址（HTTP-FLV/HLS/播放器），控制面对其做反代
+	RTMPBase   string `json:"rtmp_base"`   // 容器内推流地址（SRS 监听）
+	RTMPPublic string `json:"rtmp_public"` // 对外推流地址（端口映射后的真实地址，前端展示用）
+	PublicBase string `json:"public_base"` // 对外可访问地址，用于生成播放/推流地址
 }
 
 type state struct {
@@ -99,6 +102,7 @@ func defaultSettings() Settings {
 	return Settings{
 		AutoRecord:           true,
 		RecordSegmentMinutes: 30,
+		AccessKey:            envOr("ACCESS_KEY", "jetool"),
 		SRSAPI:               envOr("SRS_API", "http://127.0.0.1:1985"),
 		SRSHTTP:              envOr("SRS_HTTP_BASE", "http://127.0.0.1:8080"),
 		RTMPBase:             envOr("RTMP_BASE", "rtmp://127.0.0.1:1935/"),
@@ -176,6 +180,11 @@ func (s *Store) load() error {
 	} else if st.Settings.RTMPPublic == "" {
 		st.Settings.RTMPPublic = def.RTMPPublic
 	}
+	if v := os.Getenv("ACCESS_KEY"); v != "" {
+		st.Settings.AccessKey = v
+	} else if st.Settings.AccessKey == "" {
+		st.Settings.AccessKey = def.AccessKey
+	}
 	if v := os.Getenv("SRS_HTTP_BASE"); v != "" {
 		st.Settings.SRSHTTP = v
 	} else if st.Settings.SRSHTTP == "" {
@@ -231,11 +240,33 @@ func (s *Store) SetSettings(in Settings) error {
 	if in.SRSHTTP == "" {
 		in.SRSHTTP = s.st.Settings.SRSHTTP
 	}
+	if in.AccessKey == "" {
+		in.AccessKey = s.st.Settings.AccessKey
+	}
 	if in.RTMPPublic == "" {
 		in.RTMPPublic = s.st.Settings.RTMPPublic
 	}
 	s.st.Settings = in
 	return s.saveLocked()
+}
+
+// SetAccessKey 覆盖访问密钥（桌面推送配置时调用）。
+func (s *Store) SetAccessKey(key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.st.Settings.AccessKey = key
+	return s.saveLocked()
+}
+
+// AccessKey 返回当前访问密钥。
+func (s *Store) AccessKey() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.st.Settings.AccessKey
 }
 
 // ---- Targets ----

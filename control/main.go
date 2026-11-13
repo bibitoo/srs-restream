@@ -74,6 +74,8 @@ func main() {
 	mux.HandleFunc("/api/", api.auth(api.router))
 	mux.HandleFunc("/media/", api.serveMedia)
 	mux.HandleFunc("/hooks/", api.hookRouter)
+	// 捷兔桌面推配置（协议 B 面）：接口内部用访问密钥校验，可覆盖密钥
+	mux.HandleFunc("/jetdesk/config", api.handleJetDeskConfig)
 	// 录像的 HLS 切片（手机/微信兼容播放）
 	hlsDir := filepath.Join(dataDir, "hls")
 	_ = ensureDir(hlsDir)

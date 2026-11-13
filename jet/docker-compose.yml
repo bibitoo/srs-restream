@@ -11,9 +11,13 @@ services:
         soft: 65535
         hard: 65535
     ports:
-      - "${SRS_RTMP_PORT:-1935}:1935"   # RTMP 推流 / 拉流
-      - "${SRS_HTTP_PORT:-8080}:8080"   # HTTP-FLV / HLS / 播放器（可选）
-      - "${SRS_API_PORT:-1985}:1985"    # SRS 原生 API（可选，调试用）
+      # 只暴露 RTMP：推流鉴权由控制面的 on_publish 校验 ?key=
+      - "${SRS_RTMP_PORT:-1935}:1935"
+    # HTTP-FLV / HLS / 原生 API 只在容器网络内可达，
+    # 外部统一经控制面（1986）反代，从而受访问密钥保护
+    expose:
+      - "8080"
+      - "1985"
     environment:
       TZ: Asia/Shanghai
     healthcheck:

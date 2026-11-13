@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -57,19 +58,56 @@ func (a *API) publicBase(r *http.Request) string {
 	return ""
 }
 
+// accessKeyOf 从请求里提取访问密钥，支持四种携带方式：
+//
+//	X-Access-Key: <key>
+//	Authorization: Bearer <key>
+//	?key=<key>            （推流 / <video> / 播放器页用）
+//	Cookie: jsk=<key>     （浏览器里登录一次，页面内所有请求自动带上）
+func accessKeyOf(r *http.Request) string {
+	if v := r.Header.Get("X-Access-Key"); v != "" {
+		return v
+	}
+	if v := r.Header.Get("X-Auth-Token"); v != "" {
+		return v
+	}
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	}
+	if v := r.URL.Query().Get("key"); v != "" {
+		return v
+	}
+	if c, err := r.Cookie("jsk"); err == nil && c.Value != "" {
+		return c.Value
+	}
+	return ""
+}
+
+// keyOK 校验访问密钥。密钥为空时视为不启用防护（兼容旧部署）。
+func (a *API) keyOK(r *http.Request) bool {
+	want := a.store.AccessKey()
+	if want == "" {
+		return true
+	}
+	return accessKeyOf(r) == want
+}
+
+// auth 是对外的鉴权中间件：未通过一律 401，并告诉调用方该怎么带 key。
+// noAuthPaths 是免密钥的白名单：健康检查与局域网发现（只返回服务名/地址，无业务数据）。
+var noAuthPaths = map[string]bool{
+	"/api/health":   true,
+	"/api/discover": true,
+}
+
 func (a *API) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if a.token != "" {
-			t := r.Header.Get("X-Auth-Token")
-			if t == "" {
-				t = r.URL.Query().Get("token")
-			}
-			if t != a.token {
-				writeErr(w, http.StatusUnauthorized, errors.New("token 校验失败"))
-				return
-			}
+		if noAuthPaths[r.URL.Path] || a.keyOK(r) {
+			next(w, r)
+			return
 		}
-		next(w, r)
+		w.Header().Set("WWW-Authenticate", `Bearer realm="jetstream"`)
+		writeErr(w, http.StatusUnauthorized,
+			errors.New("访问密钥无效：请带 X-Access-Key / Authorization: Bearer / ?key= / Cookie jsk"))
 	}
 }
 
@@ -108,6 +146,26 @@ func (a *API) handleOverview(w http.ResponseWriter, r *http.Request) {
 		"streams_error":     errStr(serr),
 	}
 	writeJSON(w, 200, out)
+}
+
+// parseParamKey 从 SRS 回调的 param 里取 key（param 形如 "?key=abc" 或 "key=abc"）。
+func parseParamKey(param string) string {
+	p := strings.TrimPrefix(strings.TrimSpace(param), "?")
+	if p == "" {
+		return ""
+	}
+	vals, err := url.ParseQuery(p)
+	if err != nil {
+		return ""
+	}
+	return vals.Get("key")
+}
+
+func orEmpty(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 func errStr(err error) string {
@@ -706,6 +764,71 @@ func (a *API) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ---------------- 捷兔桌面：配置接收端（协议 B 面） ----------------
+
+// handleJetDeskConfig 处理桌面推送的配置。
+//
+// 鉴权：用当前访问密钥（初始 "jetool"）校验，支持 X-JetDesk-Key / Authorization: Bearer /
+// X-Access-Key / ?key=。通过后：
+//   - 若 body 带 accessKey（或 key）→ **用新值覆盖**当前密钥（此后所有访问都用新 key）
+//   - 其余字段（models / communityBaseUrl / instanceId / self）当前版本只记录，不改变业务
+//
+// 必须幂等：桌面会每 2 秒重试一次，同一份内容重复 POST 结果一致。
+func (a *API) handleJetDeskConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, errors.New("只接受 POST"))
+		return
+	}
+	var in struct {
+		Self             string                 `json:"self"`
+		AccessKey        string                 `json:"accessKey"`
+		Key              string                 `json:"key"`
+		Models           map[string]interface{} `json:"models"`
+		CommunityBaseURL string                 `json:"communityBaseUrl"`
+		InstanceID       string                 `json:"instanceId"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+
+	oldKey := a.store.AccessKey()
+	// 桌面可能用专用头带 key（协议外的约定），与通用 key 一起认
+	supplied := r.Header.Get("X-JetDesk-Key")
+	if supplied == "" {
+		supplied = accessKeyOf(r)
+	}
+	if oldKey != "" && supplied != oldKey {
+		log.Printf("拒绝 /jetdesk/config：密钥不匹配（来自 %s）", r.RemoteAddr)
+		writeErr(w, http.StatusUnauthorized, errors.New("访问密钥无效"))
+		return
+	}
+
+	newKey := strings.TrimSpace(in.AccessKey)
+	if newKey == "" {
+		newKey = strings.TrimSpace(in.Key)
+	}
+	keyUpdated := false
+	if newKey != "" && newKey != oldKey {
+		if err := a.store.SetAccessKey(newKey); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		keyUpdated = true
+		log.Printf("访问密钥已由桌面覆盖（self=%s instanceId=%s）", in.Self, in.InstanceID)
+	}
+	if in.CommunityBaseURL != "" || in.InstanceID != "" {
+		log.Printf("桌面配置：self=%s instanceId=%s community=%s models=%d 项",
+			in.Self, in.InstanceID, in.CommunityBaseURL, len(in.Models))
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"ok":         true,
+		"service":    "jetstream",
+		"keyUpdated": keyUpdated,
+		"self":       in.Self,
+	})
+}
+
 // ---------------- SRS 回调 ----------------
 
 type hookBody struct {
@@ -725,6 +848,20 @@ func (a *API) handleHook(w http.ResponseWriter, r *http.Request, action string) 
 	key := strings.TrimPrefix(in.App+"/"+in.Stream, "/")
 	// 注意：这些操作（启动/停止 ffmpeg、转封装）可能耗时数秒，
 	// 必须在后台执行，否则 SRS 的 http_hooks 会超时（实测会卡 10 秒以上）。
+	// 推流鉴权：SRS 把推流 URL 的 query 放在 param 里（如 "?key=jetool"）。
+	// 密钥不匹配直接返回非 0，SRS 会拒绝这次推流。
+	if action == "on_publish" {
+		want := a.store.AccessKey()
+		if want != "" {
+			got := parseParamKey(in.Param)
+			if got != want {
+				log.Printf("拒绝推流 %s：密钥%s", key, orEmpty(got, "缺失"))
+				writeJSON(w, 200, map[string]int{"code": 1})
+				return
+			}
+		}
+	}
+
 	switch action {
 	case "on_publish":
 		autoRecord := a.store.Settings().AutoRecord

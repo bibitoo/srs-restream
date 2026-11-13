@@ -79,7 +79,13 @@ func newSRSProxy(a *API) *srsProxy {
 }
 
 func (sp *srsProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 播放资源不要求 token（播放器页内部的相对请求无法携带），其余已由 /api 层校验
+	// 播放链路（播放器页、FLV、HLS 分片）同样受访问密钥保护。
+	// 浏览器里 <video> / iframe 无法加自定义头，所以用 Cookie jsk 或 ?key= 携带。
+	if !sp.api.keyOK(r) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="jetstream"`)
+		http.Error(w, "访问密钥无效：请先登录控制台，或用 ?key= 访问", http.StatusUnauthorized)
+		return
+	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	sp.proxy.ServeHTTP(w, r)
 }

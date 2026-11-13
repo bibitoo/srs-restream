@@ -661,7 +661,12 @@ func (r *Runner) resolveSources(job Job) ([]StreamInfo, []string, error) {
 
 func (r *Runner) localMixURL(jobID string) string {
 	base := strings.TrimRight(r.store.Settings().RTMPBase, "/")
-	return base + "/mix/" + jobID
+	u := base + "/mix/" + jobID
+	// 推流鉴权：SRS 的 on_publish 会校验 ?key=，控制面自己推也要带
+	if k := r.store.AccessKey(); k != "" {
+		u += "?key=" + url.QueryEscape(k)
+	}
+	return u
 }
 
 func localURLKey(jobID string) string { return "mix/" + jobID }
