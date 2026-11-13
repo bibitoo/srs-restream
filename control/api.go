@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -134,6 +135,34 @@ func (a *API) handleStreams(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{
 		"streams":     list,
 		"auto_record": a.store.Settings().AutoRecord,
+	})
+}
+
+// handleDiscover 供局域网内的客户端（如捷兔行迹 App）自动发现本服务。
+// 返回的地址用请求方看到的 Host 拼装，因此手机/PC 在局域网内都能直接拿到可用的推流地址。
+func (a *API) handleDiscover(w http.ResponseWriter, r *http.Request) {
+	st := a.store.Settings()
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	// RTMP 对外端口：优先从「对外推流地址」里取，其次容器内地址，最后默认 1935
+	rtmpPort := "1935"
+	for _, cand := range []string{st.RTMPPublic, st.RTMPBase} {
+		if u, err := url.Parse(cand); err == nil && u.Port() != "" {
+			rtmpPort = u.Port()
+			break
+		}
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"service":     "jetstream",
+		"name":        "捷兔流媒体服务",
+		"version":     "1.0.0",
+		"srs_version": func() string { v, _ := a.srs.Version(); return v }(),
+		"rtmp_base":   fmt.Sprintf("rtmp://%s:%s/live/", host, rtmpPort),
+		"rtmp_port":   rtmpPort,
+		"ui":          fmt.Sprintf("http://%s", r.Host),
+		"auto_record": st.AutoRecord,
 	})
 }
 

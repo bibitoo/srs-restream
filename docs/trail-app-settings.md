@@ -1,76 +1,82 @@
-# 捷兔行迹 App · 推流设置项
+# 捷兔行迹 App · 推流地址的「辅助候选」
 
-> 对应改动：设置首页把**推流设置**与**语音播报（TTS / CosyVoice）**拆成两个分组。
-> 推流设置页不再包含任何 CosyVoice 相关项。
+> 原则：**只做辅助，不绑死**。发现到的服务只用来填充候选、顺手补空，用户随时可以改成
+> 任何地址（自建服务、第三方平台都行）。原有设置项一个都没删，也没有新增强制项。
 
-## 一、设置首页分组
+## 一、用户看到的效果
 
-`app/src/main/res/xml/preferences_headers.xml`
-
-| 顺序 | 分组 | Fragment type | 说明 |
-| --- | --- | --- | --- |
-| 1 | 账号与云端 | `account` | 登录、云端轨迹 |
-| 2 | 设备管理 | （Activity） | 蓝牙传感器、相机信息 |
-| 3 | **推流与视频规格** | `streaming` | ← **仅推流**，本次清理的范围 |
-| 4 | **语音播报** | `tts` | ← 新增分组，CosyVoice 三项迁到这里 |
-| 5 | 轨迹与码表 | `track` | 体重、3D 导出 |
-| 6 | 运动记录模式 | （弹窗） | 记录模式 |
-| 7 | 通用 | `general` | 其它 |
-
-## 二、推流设置项清单（`preferences_streaming.xml`）
-
-| 设置项 | key | 控件 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- |
-| 推流协议 | `streamingProtocolPref` | ListPreference | `0`（RTMP） | RTMP / SRT / WebRTC |
-| 清晰度 | `streamingQualityPref` | ListPreference | `1080p` | 480p/720p/1080p/4K，同时决定分辨率与码率；改完推流页状态条会跟着变 |
-| RTMP 地址 | `streamingUrlRtmpPref` | `StreamUrlPreference` | `rtmp://192.168.0.14/live/stream` | 完整推流地址 |
-| SRT 地址 | `streamingUrlSrtPref` | `StreamUrlPreference` | `srt://` | 协议选 SRT 时使用 |
-| WebRTC 地址 | `streamingUrlWebrtcPref` | `StreamUrlPreference` | `https://` | WHIP 推流地址 |
-| 视频稳定 | `videoStabilizationPref` | CheckBox | `false` | 电子防抖 |
-| 推流时本地保存 | `saveLocallyWhileStreamingPref` | CheckBox | `false` | 边推边存本地 |
-| 语音控制 | `streamingVoiceControl` | CheckBox | `true` | 语音指令开关 |
-| 人脸模糊 | `streaming_face_blur` | CheckBox | `false` | 推流时对人脸打码 |
-
-> 键名与旧工程一致，历史配置可直接复用。
-> 绑定逻辑：`SettingsFragment#bindStreaming()`。
-
-### 对接「捷兔流媒体服务」时的推荐值
-
-| 场景 | 推荐配置 |
-| --- | --- |
-| 同机（手机与流媒体服务在同一台电脑/局域网） | RTMP 地址填 `rtmp://<电脑IP>:1935/live/行迹01` |
-| 走局域网 | 手机与电脑同一 Wi-Fi，IP 用电脑的局域网地址（如 `192.168.1.10`） |
-| 编码要求 | **H.264**（服务端浏览器预览不支持 H.265/HEVC） |
-| 清晰度 | 1080p（服务端默认转推/混流按 1280×720 或 1920×1080 输出，可在服务端调） |
-
-推流地址在流媒体服务的控制台「直播流」页顶部可直接复制，端口若改过以那里显示的为准。
-
-## 三、语音播报设置项（`preferences_tts.xml`，本次从推流页迁出）
-
-| 设置项 | key | 控件 | 存储 | 说明 |
-| --- | --- | --- | --- | --- |
-| 播报文稿 | `ttsScriptPref` | Preference | — | 打开 `TtsScriptActivity`（文稿/引擎/音色） |
-| 启用语音播报 | `ttsBroadcastEnabled` | CheckBox | `tts_broadcast` 偏好文件的 `tts_broadcast` 键（`persistent=false`） | 播报混入直播流；开启后推流强制走自建（遮罩）管线 |
-| 语音服务地址 | `cosyUrl` | EditText | 同上（`persistent=false`） | CosyVoice 服务地址 |
-
-绑定逻辑：`SettingsFragment#bindTts()`，只在 `type=tts` 时调用。
-
-## 四、改动的文件
+打开「设置 → 推流与视频规格」→ 点「RTMP 地址」：
 
 ```
-app/src/main/res/xml/preferences_streaming.xml   移除 3 个 TTS 项，只留推流
-app/src/main/res/xml/preferences_tts.xml         新增：TTS 三项
-app/src/main/res/xml/preferences_headers.xml     新增「语音播报」分组（type=tts）
-app/src/main/java/.../SettingsFragment.java      新增 TYPE_TTS 分支；bindStreaming 不再调 bindTts
-app/src/main/res/values/strings_settings.xml     新增 settings_header_tts / _summary
-app/src/main/res/values/values-zh/strings_settings.xml  同上（中文）
-app/src/main/res/values/strings_tts.xml          新增 tts_pref_category_title
-app/src/main/res/values-zh/strings_tts.xml       同上（中文）
+┌─ RTMP地址 ──────────────────────────────┐
+│ 历史地址 / 候选（点选即可填入）          │
+│ [ 手动输入新地址…                    ▼ ] │
+│  📡 捷兔流媒体服务 · 192.168.1.10        │  ← 局域网发现的
+│  📡 捷兔流媒体服务 · 192.168.1.23        │
+│  ✅ rtmp://192.168.1.10:1935/live/stream │  ← 推流成功过的
+│                                          │
+│ [rtmp://192.168.1.10:1935/live/stream]   │  ← 点这里也会自动展开候选
+│                              清空历史     │
+└──────────────────────────────────────────┘
+```
+
+- **点输入框**就会展开候选（不用去找下拉箭头）；
+- 📡 项选中后只替换 **IP 与端口**，保留你原来的 app 名和流名（比如 `/live/行车记录` 会保留）；
+- ✅ 项来自 `StreamUrlHistory`——**只有连接成功过才记录**，写错的地址不会进候选；
+- 进入设置页时若地址**还是空的**，用发现的第一个服务静默填一份，并 Toast 提示「已自动填入…（可修改）」；
+  **已经填过的地址不会被覆盖**。
+
+## 二、候选从哪来
+
+| 来源 | 实现 | 何时更新 |
+| --- | --- | --- |
+| 📡 局域网发现 | `StreamServiceDiscovery` 扫本机所在 /24 网段的 `1986/api/discover` | 每次打开设置页、每次打开地址对话框各扫一次（后台，1~2 秒） |
+| ✅ 推流成功地址 | `StreamUrlHistory`（原有） | 推流连接成功后立即记录，最多 12 条/协议 |
+
+发现结果缓存 24 小时（`stream_discovery` 偏好文件），断网也能出候选；过期自动失效，不需要手动清。
+
+## 三、服务端配合
+
+控制面新增只读端点，供局域网客户端发现（不需要鉴权）：
+
+```
+GET http://<ip>:1986/api/discover
+{
+  "service": "jetstream",
+  "name": "捷兔流媒体服务",
+  "version": "1.0.0",
+  "srs_version": "8.0.74",
+  "rtmp_base": "rtmp://192.168.1.10:1935/live/",   // 按请求方看到的 Host 拼装
+  "rtmp_port": "1935",
+  "ui": "http://192.168.1.10:1986",
+  "auto_record": true
+}
+```
+
+`rtmp_base` 用请求的 Host + 配置的 RTMP 端口拼装，所以手机/PC 在局域网里拿到的都是**可直接推的地址**。
+`.jet` 包已包含该端点。
+
+## 四、改动文件
+
+```
+新增 app/src/main/java/cn/jetool/trail/app/stream/StreamServiceDiscovery.java
+       局域网扫描 + 缓存 + 异步回调（TCP 350ms 超时，24 并发，扫完约 1~2 秒）
+
+修改 app/src/main/java/cn/jetool/trail/app/stream/StreamUrlPreference.java
+       候选改为「📡 发现的服务 + ✅ 成功过的地址」；点输入框自动展开；
+       进入设置页时仅当地址为空才自动填入
+
+修改 app/src/main/res/values/strings_stream.xml        +3 条（📡 / ✅ / 自动填入提示）
+修改 app/src/main/res/values-zh/strings_stream.xml     +3 条
+
+未改动：preferences_streaming.xml、preferences_headers.xml、SettingsFragment.java、
+        TTS 相关全部文件、StreamUrlHistory.java、推流管线
 ```
 
 ## 五、验证要点
 
-1. 设置首页出现「语音播报」分组，点进去只有 3 项，且能正常读写（开关状态、地址回显）；
-2. 「推流与视频规格」分组里**不再出现**播报文稿 / 启用语音播报 / 语音服务地址；
-3. 推流页的「语音播报」入口按钮行为不变（仍读 `TtsBroadcaster`）；
-4. 已有用户的配置不受影响：三项 key 未变，`tts_broadcast` 偏好文件照旧。
+1. 手机与电脑（跑着捷兔流媒体服务）在同一 Wi-Fi，打开设置 → 地址框候选里出现「📡 捷兔流媒体服务 · <电脑IP>」；
+2. 点该候选项 → 地址变成 `rtmp://<电脑IP>:1935/live/<原流名>`；
+3. 推流成功后该地址出现在「✅」组；
+4. 手动改成别的地址（如第三方平台）→ 保存生效，下次进设置页**不会被自动填回发现的服务**；
+5. 没有局域网服务且没有历史时，候选区显示「还没有推流成功过的地址，直接输入即可」。

@@ -192,6 +192,8 @@ func (a *API) router(w http.ResponseWriter, r *http.Request) {
 		a.handleLayouts(w, r)
 	case "diag":
 		a.handleDiag(w, r)
+	case "discover":
+		a.handleDiscover(w, r)
 	case "targets":
 		if rest == "" {
 			a.handleTargets(w, r)
