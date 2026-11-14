@@ -108,3 +108,28 @@ adb logcat -s CommunityApps JetoolTrailLink
 | `fetch failed` | 网络或社区基址问题 |
 
 服务端自检：浏览器打开 `http://<后端IP>:1986/api/discover`，能看到 `"service":"jetstream"` 即可。
+
+
+## 附：jdconfig `models.services.*` 必须显式声明 `models`
+
+实体机安装时如果报：
+
+```
+models.services.control 没有声明models
+```
+
+说明 `models.services.<服务名>` 里缺 `models` 键。**即使本软件不需要任何大模型能力，
+也要写空数组**，否则客户端校验不通过：
+
+```json
+"models": {
+  "requires": [],
+  "delivery": "http",
+  "services": {
+    "control": { "models": [], "configPath": "/jetdesk/config", "configPort": 1986, "configToken": "jetool" }
+  }
+}
+```
+
+`models: []` 的语义是「这个服务不需要任何模型能力」，但 `configPath` 仍然有效 ——
+桌面照样会把 `instanceId` / `communityBaseUrl` / 密钥等基础配置 POST 到 `/jetdesk/config`。
