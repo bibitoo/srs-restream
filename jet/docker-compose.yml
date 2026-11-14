@@ -1,11 +1,11 @@
 # 全部使用官方 / 公开镜像，安装时不需要本地构建（docker compose up 直接 pull + 运行）。
 #
-#   srs     : ossrs/srs:6     官方 SRS（我们没改过 SRS 源码，只用自己的 conf）
+#   srs     : ossrs/srs:8     官方 SRS（版本 8.0.74，与项目编译版一致；我们没改过 SRS 源码）
 #   control : jrottenberg/ffmpeg:4.4-ubuntu  自带 ffmpeg，跑包内预编译的静态二进制
 #
 services:
   srs:
-    image: ossrs/srs:6
+    image: ossrs/srs:8
     container_name: jetstream-srs
     restart: unless-stopped
     # SRS 启动时校验 max_connections 与文件句柄上限

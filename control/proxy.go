@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -87,5 +88,117 @@ func (sp *srsProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// HLS 播放列表要重写：SRS 生成的分片 URI 不带 key，直接透传会被鉴权拦掉。
+	if strings.HasSuffix(strings.ToLower(r.URL.Path), ".m3u8") {
+		sp.serveM3U8(w, r)
+		return
+	}
 	sp.proxy.ServeHTTP(w, r)
+}
+
+// m3u8Rewriter 把 HLS 播放列表里的 URI 逐行加上访问密钥。
+type m3u8Rewriter struct {
+	w   http.ResponseWriter
+	key string
+	buf []byte
+}
+
+func (m *m3u8Rewriter) Header() http.Header { return m.w.Header() }
+
+func (m *m3u8Rewriter) WriteHeader(code int) { m.w.WriteHeader(code) }
+
+func (m *m3u8Rewriter) Flush() {
+	if f, ok := m.w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (m *m3u8Rewriter) Write(b []byte) (int, error) {
+	m.buf = append(m.buf, b...)
+	if _, err := m.w.Write(m.rewrite()); err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+// rewrite 给每个非注释行（以及 URI="..." 属性）追加 &key=xxx。
+func (m *m3u8Rewriter) rewrite() []byte {
+	if m.key == "" {
+		return m.buf
+	}
+	lines := strings.Split(string(m.buf), "\n")
+	for i, ln := range lines {
+		trimmed := strings.TrimRight(ln, "\r")
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			// #EXT-X-KEY:METHOD=NONE 之类没有 URI；带 URI="..." 的（如加密 key）也补上
+			if idx := strings.Index(trimmed, `URI="`); idx >= 0 {
+				rest := trimmed[idx+5:]
+				if end := strings.Index(rest, `"`); end > 0 {
+					uri := rest[:end]
+					lines[i] = trimmed[:idx+5] + withKeyParam(uri, m.key) + rest[end:]
+				}
+			}
+			continue
+		}
+		lines[i] = withKeyParam(trimmed, m.key)
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+// withKeyParam 在 URI 上追加 key 参数（已存在则不重复加）。
+func withKeyParam(uri, key string) string {
+	if uri == "" || strings.Contains(uri, "key=") {
+		return uri
+	}
+	sep := "?"
+	if strings.Contains(uri, "?") {
+		sep = "&"
+	}
+	return uri + sep + "key=" + url.QueryEscape(key)
+}
+
+// serveM3U8 反向取播放列表并重写后再返回给客户端。
+func (sp *srsProxy) serveM3U8(w http.ResponseWriter, r *http.Request) {
+	base := sp.api.store.Settings().SRSHTTP
+	target := strings.TrimRight(base, "/") + r.URL.RequestURI()
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "构造请求失败: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, "无法连接 SRS 播放服务: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		http.Error(w, "读取播放列表失败: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	key := accessKeyOf(r)
+	if key == "" {
+		key = sp.api.store.AccessKey()
+	}
+	out := (&m3u8Rewriter{w: w, key: key})
+	out.buf = body
+
+	for k, vv := range resp.Header {
+		if strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Content-Encoding") {
+			continue
+		}
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(out.rewrite())
 }
