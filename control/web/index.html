@@ -970,18 +970,21 @@ function renderSettings(force) {
 
 async function saveSettings() {
   try {
+    const newKey = document.getElementById('s-key').value.trim();
     await api('/settings', {
       method: 'PUT', body: {
         auto_record: document.getElementById('s-auto').checked,
         record_segment_minutes: Number(document.getElementById('s-seg').value) || 0,
         public_base: document.getElementById('s-public').value.trim(),
-        access_key: document.getElementById('s-key').value.trim(),
+        access_key: newKey,
         srs_api: document.getElementById('s-srs').value.trim(),
         srs_http: document.getElementById('s-http').value.trim(),
         rtmp_public: document.getElementById('s-rtmp-pub').value.trim(),
         rtmp_base: document.getElementById('s-rtmp').value.trim(),
       },
     });
+    // 改过密钥就立刻换用新值：否则本页下一次请求仍带旧密钥 → 401 → 白弹一次输入框
+    if (newKey && newKey !== ACCESS_KEY) setAccessKey(newKey);
     toast('设置已保存'); // 首次进入若还没有密钥，先直接试一次：服务端若未启用防护会正常返回；401 会自动弹框
 loadAll(false);
   } catch (e) { toast('保存失败: ' + e.message, true); }

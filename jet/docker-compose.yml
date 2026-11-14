@@ -45,6 +45,13 @@ services:
       RTMP_BASE: rtmp://srs:1935/
       PUBLIC_RTMP: rtmp://127.0.0.1:${SRS_RTMP_PORT:-1935}/
       PUBLIC_BASE: ""
+      # ACCESS_KEY 只是「首次启动的初始值」，不是写死：桌面通过 POST /jetdesk/config
+      # ACCESS_KEY 只是「首次启动的初始值」，不是写死：桌面/控制台改过的密钥会持久化到
+      # /data/config.json，重启后仍是用户的值（持久化优先级高于本变量）。
+      # 这里不设，交给默认初值 jetool；如需指定初值再取消注释。
+      # ACCESS_KEY: ${ACCESS_KEY:-jetool}
+      # 配置推送的严格门禁：默认开（1）。仅排障时设 0 可临时跳过密钥校验，用完请改回。
+      # JETDESK_CONFIG_STRICT: "1"
     volumes:
       - "./control/entrypoint.sh:/app/entrypoint.sh:ro"
       - "./control/bin:/app/bin:ro"

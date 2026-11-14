@@ -766,11 +766,62 @@ func (a *API) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // ---------------- 捷兔桌面：配置接收端（协议 B 面） ----------------
 
+// factoryAccessKey 是出厂默认访问密钥（弱口令）。用户/桌面改过之后就不再是它。
+const factoryAccessKey = "jetool"
+
+// configPushAllowed 按规范（desktop-container.md §5.1「两道门」）判定配置推送是否放行。
+//
+// 第一道门是可选的 Bearer <configToken>（只防误连，不是密钥；本实现不强制）。
+// 第二道门是「当前生效的访问密钥」，满足以下任一条件即放行：
+//
+//	1. 服务本身没配口令            —— 无凭据可校
+//	2. 生效口令仍是出厂默认弱口令  —— 首推 / 老客户端兼容（此时没有秘密可守）
+//	3. X-API-Key == 生效口令       —— 正规通道
+//	4. 报文自证：body 里出现生效口令 —— 老客户端「同口令重推」不必改代码
+//	5. JETDESK_CONFIG_STRICT=0     —— 仅排障用的显式放宽开关
+//
+// 注意：**不能**把 configToken 当作永久放行凭据——它随 .jet 公开分发，
+// 一旦用户改过口令，桌面后续推送带的是新口令（规范 §5.1 客户端要求），
+// 而不是 configToken。留后门等于让公开常量长期持有改配置的权限。
+func (a *API) configPushAllowed(r *http.Request, bodyKeys []string) (bool, string) {
+	effective := a.store.AccessKey()
+
+	// 条件 1：没配口令
+	if effective == "" {
+		return true, "未配置口令"
+	}
+	// 条件 5：显式放宽（默认关，仅排障）
+	if v := strings.TrimSpace(os.Getenv("JETDESK_CONFIG_STRICT")); v == "0" || strings.EqualFold(v, "false") {
+		return true, "JETDESK_CONFIG_STRICT=0 放宽"
+	}
+	// 条件 2：生效口令仍是出厂默认弱口令（首推/老客户端兼容）
+	if effective == factoryAccessKey {
+		return true, "生效口令仍为出厂默认"
+	}
+	// 条件 3：请求头带当前生效口令（X-API-Key 为规范头，其余为兼容）
+	supplied := r.Header.Get("X-API-Key")
+	if supplied == "" {
+		supplied = r.Header.Get("X-JetDesk-Key")
+	}
+	if supplied == "" {
+		supplied = accessKeyOf(r)
+	}
+	if supplied != "" && supplied == effective {
+		return true, "X-API-Key 匹配"
+	}
+	// 条件 4：报文自证（body 里出现生效口令）
+	for _, k := range bodyKeys {
+		if k != "" && k == effective {
+			return true, "报文自证"
+		}
+	}
+	return false, ""
+}
+
 // handleJetDeskConfig 处理桌面推送的配置。
 //
-// 鉴权：用当前访问密钥（初始 "jetool"）校验，支持 X-JetDesk-Key / Authorization: Bearer /
-// X-Access-Key / ?key=。通过后：
-//   - 若 body 带 accessKey（或 key）→ **用新值覆盖**当前密钥（此后所有访问都用新 key）
+// 鉴权见 configPushAllowed（规范 §5.1 两道门）。通过后：
+//   - 若 body 带 accessKey（或 key）→ **用新值覆盖**当前密钥（此后业务访问都用新 key）
 //   - 其余字段（models / communityBaseUrl / instanceId / self）当前版本只记录，不改变业务
 //
 // 必须幂等：桌面会每 2 秒重试一次，同一份内容重复 POST 结果一致。
@@ -800,22 +851,25 @@ func (a *API) handleJetDeskConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	oldKey := a.store.AccessKey()
-	// 桌面可能用专用头带 key（协议外的约定），与通用 key 一起认
-	supplied := r.Header.Get("X-JetDesk-Key")
-	if supplied == "" {
-		supplied = accessKeyOf(r)
+	// 密钥字段名兼容：accessKey / access_key / key / token（桌面用哪个都行）
+	bodyKeys := []string{
+		strings.TrimSpace(in.AccessKey),
+		strings.TrimSpace(in.AccessKeySnake),
+		strings.TrimSpace(in.Key),
+		strings.TrimSpace(in.Token),
 	}
-	if oldKey != "" && supplied != oldKey {
-		log.Printf("拒绝 /jetdesk/config：密钥不匹配（来自 %s）", r.RemoteAddr)
+	if ok, why := a.configPushAllowed(r, bodyKeys); !ok {
+		log.Printf("拒绝 /jetdesk/config：访问密钥无效（来自 %s）", r.RemoteAddr)
 		writeErr(w, http.StatusUnauthorized, errors.New("访问密钥无效"))
 		return
+	} else if why != "X-API-Key 匹配" {
+		log.Printf("放行 /jetdesk/config：%s（来自 %s）", why, r.RemoteAddr)
 	}
 
-	// 密钥字段名兼容：accessKey / access_key / key / token（桌面用哪个都行）
+	oldKey := a.store.AccessKey()
 	newKey := ""
-	for _, cand := range []string{in.AccessKey, in.AccessKeySnake, in.Key, in.Token} {
-		if v := strings.TrimSpace(cand); v != "" {
+	for _, v := range bodyKeys {
+		if v != "" {
 			newKey = v
 			break
 		}

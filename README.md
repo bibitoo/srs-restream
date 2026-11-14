@@ -328,22 +328,50 @@ curl -s -H 'Authorization: Bearer jetool' http://127.0.0.1:1986/api/agent-manife
 
 ### 密钥从哪来、怎么改
 
+`jetool` 只是**出厂初值**，不写死。生效密钥的优先级：
+
+```
+/data/config.json 里的 access_key（用户/桌面改过的值）  >  ACCESS_KEY 环境变量（仅初值）  >  出厂 jetool
+```
+
+用控制台或桌面改过之后，**重启容器仍是新值**；`ACCESS_KEY` 环境变量**不会**在每次启动时把用户改过的口令冲掉。
+
 | 时机 | 行为 |
 | --- | --- |
-| 首次启动 | 默认 `jetool`（可用环境变量 `ACCESS_KEY` 覆盖） |
-| 捷兔桌面推配置 | `POST /jetdesk/config`，用**当前密钥**校验；body 里带 `accessKey` 则**覆盖**为新值 |
-| 之后 | 新密钥成为所有访问的唯一凭据，旧密钥立即失效 |
+| 首次启动（无 config.json） | `jetool`（或 `ACCESS_KEY` 给的初值） |
+| 控制台设置页保存 | 立即生效、持久化，本页自动换用新密钥 |
+| 捷兔桌面推配置 | `POST /jetdesk/config`，body 带 `accessKey` 则**覆盖**为新值 |
+| 改过之后 | 旧密钥（含 `jetool`）对所有业务入口立即失效 |
 
 ```http
 POST /jetdesk/config
-X-JetDesk-Key: jetool          ← 也可用 Authorization: Bearer / X-Access-Key / ?key=
+X-API-Key: jetool              ← 当前生效密钥；首次就是 jetool
 Content-Type: application/json
 
-{"self":"app","accessKey":"新密钥","instanceId":"d-xxx:jetsream"}
+{"self":"jetstream","accessKey":"新密钥","instanceId":"d-xxx:jetsream"}
 → {"ok":true,"keyUpdated":true}
 ```
 
 接口**幂等**：同一份内容重复推送结果一致（桌面会每 2 秒重试）。
+
+#### 配置推送鉴权（规范 §5.1「两道门」）
+
+第一道门是 `Authorization: Bearer <configToken>`（可选，**只防误连、不是密钥**，随 `.jet` 公开分发）。
+第二道门是当前生效密钥，满足**任一**即放行：
+
+| 顺序 | 条件 | 用途 |
+| --- | --- | --- |
+| 1 | 服务本身没配口令 | 无凭据可校 |
+| 2 | 生效口令仍是出厂默认 `jetool` | 首推 / 老客户端兼容（此时没有秘密可守） |
+| 3 | `X-API-Key` == 生效口令（也认 `X-JetDesk-Key` / `X-Access-Key` / Bearer / `?key=`） | 正规通道 |
+| 4 | 报文自证：body 的 `accessKey`/`access_key`/`key`/`token` 等于生效口令 | 老客户端「同口令重推」 |
+| 5 | `JETDESK_CONFIG_STRICT=0` | **仅排障**，默认关 |
+
+> ⚠️ `configToken` **不是**永久放行凭据。用户改过口令后，桌面后续推送带的是**新口令**（规范要求）；
+> 把公开常量当后门，等于长期开放「改配置」的权限。
+>
+> 换口令的那一次推送带**旧口令**、body 带新口令；之后一律用新口令。桌面收到 `401` 且文案含
+> 「访问密钥」时，说明带的是旧口令，应改用当前口令重推，不要静默无限重试。
 
 ### 四种携带方式
 

@@ -180,9 +180,10 @@ func (s *Store) load() error {
 	} else if st.Settings.RTMPPublic == "" {
 		st.Settings.RTMPPublic = def.RTMPPublic
 	}
-	if v := os.Getenv("ACCESS_KEY"); v != "" {
-		st.Settings.AccessKey = v
-	} else if st.Settings.AccessKey == "" {
+	// 访问密钥特殊：它是**用户数据**，不是部署参数。
+	// 优先级必须是「配置文件（用户/桌面改过的值） > ACCESS_KEY 环境变量（仅初值）> 出厂 jetool」。
+	// 反过来让 env 每次启动覆盖，会把用户在控制台/桌面改过的口令冲掉，等于变相写死。
+	if st.Settings.AccessKey == "" {
 		st.Settings.AccessKey = def.AccessKey
 	}
 	if v := os.Getenv("SRS_HTTP_BASE"); v != "" {

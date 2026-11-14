@@ -56,10 +56,18 @@ const state = {
 const sandbox = {
   console, Date, Math, JSON, Number, String, Array, Object, Set, isNaN, parseInt, parseFloat,
   encodeURIComponent, decodeURIComponent,
+  // 前端用 localStorage 存访问密钥、用 cookie jsk 给 <video>/HLS 带凭据，两者都要 stub
+  localStorage: {
+    _d: {},
+    getItem(k) { return Object.prototype.hasOwnProperty.call(this._d, k) ? this._d[k] : null; },
+    setItem(k, v) { this._d[k] = String(v); },
+    removeItem(k) { delete this._d[k]; },
+  },
   setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
   navigator: {},
   document: {
     hidden: false,
+    cookie: '',
     activeElement: { tagName: 'BODY' },
     getElementById: mkEl,
     querySelectorAll: (sel) => {
