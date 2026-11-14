@@ -30,22 +30,20 @@ if [ -z "${JET_SKILL:-}" ]; then
 fi
 [ -n "${JET_SKILL:-}" ] || { echo "找不到 jet-software-builder 技能目录，请设置 JET_SKILL" >&2; exit 1; }
 
-# 1) 准备 SRS 源码快照（38MB，已在 .gitignore 中）
-if [ ! -d "$ROOT/build/srs-src/trunk" ]; then
-  echo "[jet] 未找到 SRS 源码快照，先执行 prepare-srs-source.sh"
-  SRS_SRC="$SRS_SRC" "$ROOT/scripts/prepare-srs-source.sh"
-fi
+# 2) 编译控制面静态二进制（amd64 + arm64），随包分发 —— 安装时无需本地构建
+echo "[jet] 编译控制面（linux/amd64 + arm64）"
+mkdir -p "$ROOT/jet/control/bin"
+( cd "$ROOT/control" && \
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+    -o "$ROOT/jet/control/bin/srs-control-linux-amd64" . && \
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
+    -o "$ROOT/jet/control/bin/srs-control-linux-arm64" . )
 
-# 2) 组装 jetdesk 目录
+# 3) 组装 jetdesk 目录
 echo "[jet] 组装包目录 → $BUILD/jetdesk"
 rm -rf "$BUILD"
 mkdir -p "$BUILD"
 cp -a "$ROOT/jet" "$BUILD/jetdesk"
-cp -a "$ROOT/build/srs-src" "$BUILD/jetdesk/srs/src"
-
-mkdir -p "$BUILD/jetdesk/control/src"
-cp "$ROOT"/control/*.go "$ROOT/control/go.mod" "$BUILD/jetdesk/control/src/"
-cp -a "$ROOT/control/web" "$BUILD/jetdesk/control/src/web"
 
 chmod +x "$BUILD/jetdesk/control/entrypoint.sh"
 

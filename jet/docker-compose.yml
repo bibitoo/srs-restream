@@ -1,11 +1,14 @@
+# 全部使用官方 / 公开镜像，安装时不需要本地构建（docker compose up 直接 pull + 运行）。
+#
+#   srs     : ossrs/srs:6     官方 SRS（我们没改过 SRS 源码，只用自己的 conf）
+#   control : jrottenberg/ffmpeg:4.4-ubuntu  自带 ffmpeg，跑包内预编译的静态二进制
+#
 services:
-  # ---------------- SRS 推流服务器 ----------------
   srs:
-    build:
-      context: ./srs
-    image: jietu/srs:8.0.74
+    image: ossrs/srs:6
     container_name: jetstream-srs
     restart: unless-stopped
+    # SRS 启动时校验 max_connections 与文件句柄上限
     ulimits:
       nofile:
         soft: 65535
@@ -20,37 +23,31 @@ services:
       - "1985"
     environment:
       TZ: Asia/Shanghai
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:1985/api/v1/versions"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
+    volumes:
+      - "./srs/srs.conf:/usr/local/srs/conf/srs.conf:ro"
+    command: ["./objs/srs", "-c", "conf/srs.conf"]
 
-  # ---------------- 控制面：转推 / 混流 / 录制 / 控制台 ----------------
   control:
-    build:
-      context: ./control
-    image: jietu/srs-restream-control:1.0.0
+    image: jrottenberg/ffmpeg:4.4-ubuntu
     container_name: jetstream-control
     restart: unless-stopped
     depends_on:
       srs:
         condition: service_started
+    entrypoint: ["/app/entrypoint.sh"]
     ports:
-      - "${UI_PORT:-1986}:1986"         # 控制台 + 业务 API + 预览（已反代 FLV/HLS）
+      - "${UI_PORT:-1986}:1986"
     environment:
       TZ: Asia/Shanghai
       DATA_DIR: /data
-      # 容器网络内访问 SRS
       SRS_API: http://srs:1985
       SRS_HTTP_BASE: http://srs:8080
       RTMP_BASE: rtmp://srs:1935/
-      # 给用户看的对外推流地址（主机名会按访问地址自动替换，端口取自下面的映射）
       PUBLIC_RTMP: rtmp://127.0.0.1:${SRS_RTMP_PORT:-1935}/
-      # 对外播放地址，留空则由浏览器当前访问地址拼（推荐留空）
       PUBLIC_BASE: ""
     volumes:
+      - "./control/entrypoint.sh:/app/entrypoint.sh:ro"
+      - "./control/bin:/app/bin:ro"
       - "${JETDESK_PROJECT_ROOT}/data:/data"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:1986/api/health"]

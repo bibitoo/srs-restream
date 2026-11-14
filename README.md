@@ -46,8 +46,10 @@
 | 双容器 | `jet/` 下的 `srs/` + `control/` 与 compose | 想独立升级 SRS，或与其它服务编排 |
 | **捷兔桌面软件包** | `scripts/build-jet.sh` → `*.jet` | 终端用户双击安装，自带控制台与说明书 |
 
-`.jet` 包内容见 `jet/`（jdconfig、compose、两个 Dockerfile、包内说明书），
-打包后约 7.9MB（含 SRS 源码，首次安装在本机编译，约 3~5 分钟）。
+`.jet` 包内容见 `jet/`（jdconfig、compose、SRS conf、预编译的控制面二进制、包内说明书），
+打包后约 **4.6MB**。安装时**不需要本地构建**：SRS 用官方镜像 `ossrs/srs:6`，
+控制面跑包内预编译的静态二进制（amd64/arm64 各一份），基础镜像用 `jrottenberg/ffmpeg`（自带 ffmpeg）。
+首次启动只拉镜像（约 460MB，20~60 秒）。
 
 ## 快速开始
 
