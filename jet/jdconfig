@@ -5,23 +5,11 @@
   "workDir": "jetstream",
   "endpointPort": 1986,
   "localEndpointPort": 1986,
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "基于 SRS 的推流服务器：接收 RTMP 推流，支持转推第三方平台、多路混流（宫格/画中画/圆窗口）、自动录制与录像回放。",
   "applicationIds": [
     "jetool-trail"
   ],
-  "models": {
-    "requires": [],
-    "delivery": "http",
-    "services": {
-      "control": {
-        "models": [],
-        "configPath": "/jetdesk/config",
-        "configPort": 1986,
-        "configToken": "jetool"
-      }
-    }
-  },
   "agent": {
     "title": "捷兔流媒体服务",
     "summary": "推流、转推、混流、录像",

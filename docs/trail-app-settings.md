@@ -110,26 +110,27 @@ adb logcat -s CommunityApps JetoolTrailLink
 服务端自检：浏览器打开 `http://<后端IP>:1986/api/discover`，能看到 `"service":"jetstream"` 即可。
 
 
-## 附：jdconfig `models.services.*` 必须显式声明 `models`
+## 附：`models.services.*` 校验的踩坑记录（结论：不需要模型能力就不要写 models 段）
 
-实体机安装时如果报：
+实体机安装报错：
 
 ```
 models.services.control 没有声明models
 ```
 
-说明 `models.services.<服务名>` 里缺 `models` 键。**即使本软件不需要任何大模型能力，
-也要写空数组**，否则客户端校验不通过：
+两次尝试的结果（2026-11-14 实测）：
 
-```json
-"models": {
-  "requires": [],
-  "delivery": "http",
-  "services": {
-    "control": { "models": [], "configPath": "/jetdesk/config", "configPort": 1986, "configToken": "jetool" }
-  }
-}
-```
+| 版本 | jdconfig 写法 | 结果 |
+| --- | --- | --- |
+| 1.2.0 | `services.control` 只有 configPath/configPort/configToken，无 `models` 键 | ❌ 报"没有声明models" |
+| 1.2.1 | `services.control.models = []`（空数组） | ❌ 仍然报同样错误 → 客户端要求**至少一个能力** |
+| **1.2.2** | **整段去掉 `models`** | ✅ 可以安装 |
 
-`models: []` 的语义是「这个服务不需要任何模型能力」，但 `configPath` 仍然有效 ——
-桌面照样会把 `instanceId` / `communityBaseUrl` / 密钥等基础配置 POST 到 `/jetdesk/config`。
+结论：`models` 段是给"需要大模型能力"的软件用的。本软件不需要任何模型能力，
+塞一个假能力名会让桌面去推不存在的模型配置，所以正确做法是**不声明 models 段**。
+
+代价与替代：
+
+- 桌面不会再自动 `POST /jetdesk/config`（因为没有 configPath 可推）→ 密钥不由桌面下发
+- 密钥默认 `jetool`，可在**控制台 → 设置 → 访问密钥**里修改（也可用环境变量 `ACCESS_KEY`）
+- `/jetdesk/config` 接口仍然保留，任何有密钥的一方都能推（包括手动 curl）
