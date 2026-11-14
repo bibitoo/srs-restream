@@ -110,27 +110,52 @@ adb logcat -s CommunityApps JetoolTrailLink
 服务端自检：浏览器打开 `http://<后端IP>:1986/api/discover`，能看到 `"service":"jetstream"` 即可。
 
 
-## 附：`models.services.*` 校验的踩坑记录（结论：不需要模型能力就不要写 models 段）
+## 附：`models` 段与密钥下发（1.2.3 最终方案）
 
-实体机安装报错：
+`models` 段唯一的用途是**拿到 `configPath`**，让桌面把配置（含访问密钥）POST 到
+`/jetdesk/config`。本软件不需要任何大模型能力，所以：
 
+```json
+"models": {
+  "requires": [],
+  "delivery": "http",
+  "services": {
+    "control": {
+      "configPath": "/jetdesk/config",
+      "configPort": 1986,
+      "configToken": "jetool"
+    }
+  }
+}
 ```
-models.services.control 没有声明models
-```
 
-两次尝试的结果（2026-11-14 实测）：
+**注意 `services.control` 里不写 `models`**。历史踩坑：
 
-| 版本 | jdconfig 写法 | 结果 |
+| 版本 | 写法 | 结果 |
 | --- | --- | --- |
-| 1.2.0 | `services.control` 只有 configPath/configPort/configToken，无 `models` 键 | ❌ 报"没有声明models" |
-| 1.2.1 | `services.control.models = []`（空数组） | ❌ 仍然报同样错误 → 客户端要求**至少一个能力** |
-| **1.2.2** | **整段去掉 `models`** | ✅ 可以安装 |
+| 1.2.0 | 无 `models` 键 | ❌ 桌面报「models.services.control 没有声明models」 |
+| 1.2.1 | `models: []` | ❌ 仍报同一句（桌面要求至少一个能力） |
+| 1.2.2 | 整段去掉 `models` | ✅ 可装，但**失去密钥下发** |
+| **1.2.3** | 保留 `models`，service 内不写 `models` | ✅ 桌面侧改为「`models` 非必填」后可用 |
 
-结论：`models` 段是给"需要大模型能力"的软件用的。本软件不需要任何模型能力，
-塞一个假能力名会让桌面去推不存在的模型配置，所以正确做法是**不声明 models 段**。
+结论：桌面需要放宽「`services[].models` 必填」的校验；放宽后 1.2.3 既能装、又能通过
+`configPath` 收到下发的密钥。
 
-代价与替代：
+### 密钥下发协议（本服务实现）
 
-- 桌面不会再自动 `POST /jetdesk/config`（因为没有 configPath 可推）→ 密钥不由桌面下发
-- 密钥默认 `jetool`，可在**控制台 → 设置 → 访问密钥**里修改（也可用环境变量 `ACCESS_KEY`）
-- `/jetdesk/config` 接口仍然保留，任何有密钥的一方都能推（包括手动 curl）
+```http
+POST /jetdesk/config
+X-JetDesk-Key: <当前密钥>          ← 也可 Bearer / X-Access-Key / ?key=
+Content-Type: application/json
+
+{ "self": "control",
+  "accessKey": "新密钥",            ← 字段名兼容 accessKey / access_key / key / token
+  "instanceId": "d-xxx:jetsream",
+  "communityBaseUrl": "https://soft.jetool.net" }
+→ {"ok":true,"keyUpdated":true}
+```
+
+- 校验用**当前**密钥（初始 `jetool`，来自 `configToken`）
+- 带新密钥则**覆盖**并持久化，此后所有入口（API / 预览 / SRS 推流）都用新密钥
+- 幂等：同一内容重复推结果一致（桌面每 2 秒重试不产生副作用）
+- `GET /jetdesk/config` 作为 healthPath 探针，免鉴权返回 `{"ok":true}`

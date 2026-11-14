@@ -788,7 +788,9 @@ func (a *API) handleJetDeskConfig(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Self             string                 `json:"self"`
 		AccessKey        string                 `json:"accessKey"`
+		AccessKeySnake   string                 `json:"access_key"`
 		Key              string                 `json:"key"`
+		Token            string                 `json:"token"`
 		Models           map[string]interface{} `json:"models"`
 		CommunityBaseURL string                 `json:"communityBaseUrl"`
 		InstanceID       string                 `json:"instanceId"`
@@ -810,9 +812,13 @@ func (a *API) handleJetDeskConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newKey := strings.TrimSpace(in.AccessKey)
-	if newKey == "" {
-		newKey = strings.TrimSpace(in.Key)
+	// 密钥字段名兼容：accessKey / access_key / key / token（桌面用哪个都行）
+	newKey := ""
+	for _, cand := range []string{in.AccessKey, in.AccessKeySnake, in.Key, in.Token} {
+		if v := strings.TrimSpace(cand); v != "" {
+			newKey = v
+			break
+		}
 	}
 	keyUpdated := false
 	if newKey != "" && newKey != oldKey {
