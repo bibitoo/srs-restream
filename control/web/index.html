@@ -63,6 +63,12 @@
   .modal header h3{margin:0;font-size:15px}
   .modal .body{padding:18px 20px;max-height:72vh;overflow:auto}
   .modal .foot{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end;position:sticky;bottom:0;background:#fff}
+  /* 实时预览：弹窗内直接播 HTTP-FLV（不用 iframe 套 SRS 播放器页） */
+  .pv-box{background:#000;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+  .pv-box video{width:100%;max-height:56vh;display:block;background:#000}
+  .pv-tip{margin-top:8px;padding:8px 10px;border-radius:8px;background:#f2f4f7;color:var(--muted);font-size:12px;line-height:1.6;word-break:break-all}
+  .pv-tip.err{background:#fdecea;color:#a4291c}
+  .pv-tip.ok{background:#e9f7ef;color:#0b6b3a}
   .field{margin-bottom:14px}
   .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
   input[type=text],input[type=number],select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:#fff;color:var(--text)}
@@ -179,6 +185,20 @@ function setAccessKey(k) {
   }
 }
 
+// 桌面按 jdconfig.endpoints[].keyQuery 打开入口时会带 ?key=<口令>（如 http://host:1986/?key=xxx）。
+// 首屏直接采用它，然后从地址栏移除：口令不该留在浏览历史/截图里。
+// 参数名就是 keyQuery 的值（本服务声明 "key"），不识别任何别名。
+(function adoptKeyFromURL() {
+  try {
+    const u = new URL(location.href);
+    const k = u.searchParams.get('key') || '';
+    if (!k) return;
+    setAccessKey(k.trim());
+    u.searchParams.delete('key');
+    history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+  } catch (e) { /* 老浏览器/异常环境忽略，退回手动输入 */ }
+})();
+
 // 把 key 拼到 URL（播放/推流地址用）
 function withKey(url) {
   if (!ACCESS_KEY) return url;
@@ -221,9 +241,104 @@ function toast(msg, isErr) {
   el._t = setTimeout(() => { el.className = 'toast'; }, 2600);
 }
 
-// 在当前页面用 iframe 内嵌 SRS 播放器预览，避免用户跳到新标签以为"打不开"
+// 实时预览：在弹窗里用 mpegts.js 直接播 HTTP-FLV。
+//
+// 早期实现是 <iframe src="/players/srs_player.html?...">，把 SRS 自带的播放器页套进弹窗。
+// 那个页面自带导航条、URL 输入框和「推荐播放器」列表，并且要靠它自己的脚本去解析
+// server/port 等参数才开播；一旦它没跑起来，弹窗里就只剩一堆页面文字（看起来像"html 内容"），
+// 完全看不到画面。所以这里改成自己播：弹窗里就是一个 <video>，源是带 key 的 FLV 地址。
+let pvPlayer = null;   // 当前预览的 mpegts player
+let pvSrc = '';        // 当前预览的 FLV 地址（供「重新连接」用）
+let pvLibPromise = null;
+let pvTimer = null;    // 首帧看门狗：迟迟没画面就给出可操作的提示，而不是一直转圈
+
+// 按需加载播放库（273KB，不打开预览就不下载）
+function loadPlayerLib() {
+  if (window.mpegts) return Promise.resolve(true);
+  if (pvLibPromise) return pvLibPromise;
+  pvLibPromise = new Promise(resolve => {
+    const s = document.createElement('script');
+    s.src = '/vendor/mpegts.js';
+    s.onload = () => resolve(!!window.mpegts);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+  return pvLibPromise;
+}
+
+function clearPvTimer() { if (pvTimer) { clearTimeout(pvTimer); pvTimer = null; } }
+
+function stopPreview() {
+  clearPvTimer();
+  const p = pvPlayer; pvPlayer = null;
+  if (!p) return;
+  try { p.pause(); } catch (e) {}
+  try { p.unload(); } catch (e) {}
+  try { p.detachMediaElement(); } catch (e) {}
+  try { p.destroy(); } catch (e) {}
+}
+
+// 在弹窗里起播。url 必须已带 key（streamURLs 负责）。
+function startPreview(url) {
+  const video = document.getElementById('pv-video');
+  const tip = document.getElementById('pv-tip');
+  if (!video || !tip) return;                       // 弹窗已关
+  stopPreview();
+  pvSrc = url;
+  if (!window.mpegts || !mpegts.getFeatureList().mseLivePlayback) {
+    tip.className = 'pv-tip err';
+    tip.textContent = '当前浏览器不支持 MSE（mpegts.js），无法在页面内播放 HTTP-FLV。'
+      + '请复制下面的 FLV 地址用 VLC/PotPlayer 播放，或点「新窗口打开」用 SRS 播放器页。';
+    return;
+  }
+  tip.className = 'pv-tip';
+  tip.textContent = '正在连接 ' + url + ' …';
+  try {
+    pvPlayer = mpegts.createPlayer(
+      { type: 'flv', isLive: true, url: url },
+      { enableStashBuffer: false, liveBufferLatencyChasing: true, lazyLoad: false }
+    );
+    pvPlayer.on(mpegts.Events.MEDIA_INFO, mi => {
+      if (!document.getElementById('pv-video')) return;
+      clearPvTimer();
+      tip.className = 'pv-tip ok';
+      tip.textContent = '已连接' + (mi && mi.mimeType ? '：' + mi.mimeType : '')
+        + (mi && mi.width ? ' · ' + mi.width + '×' + mi.height : '')
+        + '（已静音，点播放器音量图标可开声音）';
+    });
+    pvPlayer.on(mpegts.Events.ERROR, (type, detail) => {
+      if (!document.getElementById('pv-video')) return;
+      const msg = (detail && (detail.msg || detail.code || detail.reason)) || '';
+      tip.className = 'pv-tip err';
+      tip.textContent = '播放出错[' + type + '] ' + msg
+        + ' —— 若是 404/401 说明地址或密钥不对；若编码是 H.265/HEVC，浏览器播不了，请改 H.264 推流。';
+    });
+    pvPlayer.attachMediaElement(video);
+    pvPlayer.load();
+    const pr = pvPlayer.play();
+    if (pr && pr.catch) pr.catch(() => {
+      if (document.getElementById('pv-video')) tip.textContent = '浏览器拦截了自动播放，点播放器上的播放按钮即可。';
+    });
+    clearPvTimer();
+    pvTimer = setTimeout(() => {
+      const t = document.getElementById('pv-tip');
+      if (!t || t.className.indexOf('ok') >= 0) return;
+      t.className = 'pv-tip err';
+      t.textContent = '等了 8 秒还没收到画面：多半是流没在推、流名不对，或访问密钥无效。'
+        + '可点「新窗口打开」看 SRS 播放器页的报错，或复制 FLV 地址用 VLC 试播。';
+    }, 8000);
+  } catch (e) {
+    tip.className = 'pv-tip err';
+    tip.textContent = '初始化播放器失败：' + e.message;
+  }
+}
+
+function reconnectPreview() { if (pvSrc) startPreview(pvSrc); }
+
+// 实时预览弹窗（直播流列表 / 混流输出 都用它）
 function openPreview(app, stream, title) {
-  const url = playerURL(app, stream);
+  const urls = streamURLs(app, stream);          // {flv, hls}，已带 key
+  const pageURL = playerURL(app, stream);        // SRS 播放器页，留作排障兜底
   const info = S.streams.find(x => x.app === app && x.stream === stream);
   let warn = '';
   if (!info || !info.active) {
@@ -232,18 +347,20 @@ function openPreview(app, stream, title) {
     warn = '<div class="hint" style="color:var(--warn)">该流是 H.265/HEVC，浏览器 HTTP-FLV 播放通常不支持，请改用 H.264 推流，或用 VLC 播放下面的 FLV 地址。</div>';
   }
   const m = openModal('实时预览 · ' + (title || (app + '/' + stream)), `
-    <div style="background:#000;border-radius:8px;overflow:hidden">
-      <iframe src="${url}" style="width:100%;height:56vh;border:0;display:block" allow="autoplay; fullscreen"></iframe>
-    </div>
+    <div class="pv-box"><video id="pv-video" controls autoplay muted playsinline></video></div>
+    <div class="pv-tip" id="pv-tip">正在加载播放器…</div>
     ${warn}
-    <div class="hint">若画面区域仍是黑的：可点「新窗口打开」看具体报错，或用 VLC/PotPlayer 播放下面的 FLV 地址（可绕过浏览器限制）。</div>
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <a class="btn sm" href="${url}" target="_blank" rel="noreferrer">新窗口打开</a>
-      <button class="btn sm" onclick="copyText('${esc(streamURLs(app, stream).flv)}')">复制 FLV 地址</button>
-      <button class="btn sm" onclick="copyText('${esc(streamURLs(app, stream).hls)}')">复制 HLS 地址</button>
+      <button class="btn sm" onclick="reconnectPreview()">重新连接</button>
+      <a class="btn sm" href="${pageURL}" target="_blank" rel="noreferrer">新窗口打开</a>
+      <button class="btn sm" onclick="copyText('${esc(urls.flv)}')">复制 FLV 地址</button>
+      <button class="btn sm" onclick="copyText('${esc(urls.hls)}')">复制 HLS 地址</button>
     </div>
-    <div class="url mono">${esc(location.origin + '/' + app + '/' + stream + '.flv')}</div>
+    <div class="url mono">${esc(urls.flv)}</div>
   `, null, 'wide');
+  // 关弹窗必须销毁播放器，否则 FLV 长连接会一直挂着
+  m.onClose = stopPreview;
+  loadPlayerLib().then(() => startPreview(urls.flv));
   return m;
 }
 
@@ -337,12 +454,52 @@ function playerURL(app, stream, suffix) {
   const q = 'autostart=true&schema=http&app=' + encodeURIComponent(app) + '&stream=' + encodeURIComponent(stream) + tail;
   return withKey(base + '/players/srs_player.html?' + q);
 }
-// 推流基地址：优先用「对外推流地址」（端口映射后的真实地址）
+// RTMP 端点：宿主端口由捷兔桌面分配（端口冲突时不再是 1935），解析结果在 overview.endpoints
+function rtmpEndpoint() {
+  const eps = (S.overview && S.overview.endpoints) || [];
+  return eps.find(e => e.name === 'rtmp' || e.protocol === 'rtmp') || null;
+}
+// 推流基址：**已包含 app 路径**（如 rtmp://<ip>:<rtmpHostPort>/live/），后面直接接流名。
+// 绝不写死 127.0.0.1 或宿主端口 —— 宿主端口由捷兔桌面分配，可能与容器内端口不同。
+// 主机名跟随当前访问地址（换机器/局域网访问都能用），端口与路径保留服务端解析结果。
 function rtmpBase() {
+  const swapHost = (u) => u.replace(/\/\/(\[[^\]]+\]|[^/:]+)(:\d+)?/, (m, h, p) => '//' + location.hostname + (p || ''));
+
   const pub = (S.settings.rtmp_public || '').trim();
-  const base = (pub || S.settings.rtmp_base || 'rtmp://127.0.0.1:1935').replace(/\/$/, '');
-  // 端口按配置保留，主机名跟随当前访问地址（换机器访问也能用）
-  return base.replace(/\/\/[^/:]+/, '//' + location.hostname) + '/';
+  if (pub) {
+    // 用户显式填的「对外推流地址」按历史约定不含 app（如 rtmp://192.168.1.10:1935/），补 live/
+    return swapHost(pub.replace(/\/+$/, '')) + '/live/';
+  }
+  const ep = rtmpEndpoint();
+  if (ep && ep.url) {
+    // 端点 url 已含 jdconfig 里的 path（/live/），不能再拼一次
+    const u = ep.url.endsWith('/') ? ep.url : ep.url + '/';
+    return swapHost(u);
+  }
+  const local = (S.settings.rtmp_base || '').trim();
+  if (local) {
+    return swapHost(local.replace(/\/+$/, '')) + '/live/';
+  }
+  // 拿不到服务端的端点解析结果（多半是服务异常）：只给当前主机，不猜端口
+  return 'rtmp://' + location.hostname + '/live/';
+}
+// 推流口令：来自 /api/overview 的 publish_key（与 access_key 刻意分开）。
+// access_key 只用于控制台/播放鉴权，绝不能出现在 RTMP 推流地址里。
+function publishKey() {
+  return ((S.overview && S.overview.publish_key) || '').trim();
+}
+// 推流地址模板（流名是占位；基址已含 app 路径）
+function pushURLTemplate() {
+  const k = publishKey();
+  return rtmpBase() + '流名' + (k ? '?key=' + k : '');
+}
+
+// 推流端口是否可信：来源是桌面推送/环境变量/请求地址时可信，回退容器内端口时要提醒
+function rtmpPortTrusted() {
+  const ep = rtmpEndpoint();
+  if (ep) return ep.portSource !== 'container-port';
+  // 连端点表都拿不到：只有用户显式填了对外推流地址才算可信
+  return !!(S.settings.rtmp_public || '').trim();
 }
 
 // 直播流地址（相对当前站点，经反代命中 SRS 的 HTTP-FLV / HLS）
@@ -358,7 +515,7 @@ function renderStreams(force) {
   const box = document.getElementById('streams-box');
   const list = S.streams;
   const hint = document.getElementById('push-hint');
-  if (hint) hint.textContent = rtmpBase() + 'live/流名' + (ACCESS_KEY ? '?key=' + ACCESS_KEY : '');
+  if (hint) hint.textContent = pushURLTemplate();
   // 内容没变就不重建表格，避免刷新时按钮/交互被打断
   const fp = list.map(x => [x.key, x.active ? 1 : 0, x.video, x.kbps_recv, x.clients,
     x.recording ? x.recording.id + '@' + Math.floor(x.recording.duration / 5) : '-'].join(':')).join('|');
@@ -366,8 +523,8 @@ function renderStreams(force) {
   fpStreams = fp;
   document.getElementById('stream-hint').textContent = S.overview.srs_error ? ('SRS API 异常：' + S.overview.srs_error) : '';
   if (!list.length) {
-    box.innerHTML = `<div class="empty">暂无流。用 OBS/ffmpeg 推流到 <code>${esc(rtmpBase())}live/流名${ACCESS_KEY ? '?key=' + esc(ACCESS_KEY) : ''}</code> 即可看到。<br>
-      <span class="muted" style="font-size:12px">若推流后这里仍是空的：确认推流地址的端口与本页提示一致（容器端口映射后可能与 1935 不同）。</span></div>`;
+    box.innerHTML = `<div class="empty">暂无流。用 OBS/ffmpeg 推流到 <code>${esc(pushURLTemplate())}</code> 即可看到。<br>
+      <span class="muted" style="font-size:12px">若推流后这里仍是空的：确认推流地址的端口与本页提示一致（宿主端口可能与容器内的 1935 不同）。</span></div>`;
     return;
   }
   box.innerHTML = `<table><thead><tr>
@@ -389,8 +546,8 @@ function renderStreams(force) {
         <button class="btn sm" onclick="openJobModal(null, '${esc(s.key)}')">转推</button>
       </td>
     </tr>`).join('')}</tbody></table>
-    <div class="url">RTMP 推流地址模板：<code>${esc(rtmpBase())}[app]/[stream]</code>
-      ${S.settings.rtmp_public ? '' : '<span style="color:var(--warn)">（未配置对外推流地址，若容器端口做过映射，请在设置里填「对外推流地址」，否则推流会连到错误端口）</span>'}</div>`;
+    <div class="url">RTMP 推流地址模板：<code>${esc(pushURLTemplate())}</code>
+      ${rtmpPortTrusted() ? '' : '<span style="color:var(--warn)">（宿主推流端口未知，已按容器内端口显示；若桌面做过端口映射，推流会连到错误端口）</span>'}</div>`;
 }
 
 async function startRecord(key) {
@@ -959,12 +1116,13 @@ function renderSettings(force) {
       <input type="text" id="s-key" value="${esc(s.access_key || '')}" placeholder="jetool">
       <div class="hint">默认 <code>jetool</code>，也可用环境变量 <code>ACCESS_KEY</code> 指定。改完立即生效，
         当前浏览器会被要求重新输入新密钥。推流地址需带 <code>?key=密钥</code>。</div></div>
-    <div class="field"><label>对外推流地址（容器端口映射后的真实地址，如 rtmp://192.168.1.10:19351/）</label>
-      <input type="text" id="s-rtmp-pub" value="${esc(s.rtmp_public || '')}" placeholder="${esc(s.rtmp_base || 'rtmp://127.0.0.1:1935/')}">
-      <div class="hint">容器内 SRS 监听 1935，但宿主机常映射成别的端口（如 19351）。这里填用户实际推流用的地址，控制台会原样显示给用户，避免推错端口。</div></div>
+    <div class="field"><label>对外推流地址（可选覆盖，一般留空）</label>
+      <input type="text" id="s-rtmp-pub" value="${esc(s.rtmp_public || '')}" placeholder="${esc(rtmpBase() + '流名')}">
+      <div class="hint">留空即可：宿主端口由捷兔桌面分配（端口冲突时会自动改号），控制台直接用解析结果生成推流地址。
+        只有在「不用桌面、自己映射端口」或需要指定固定域名时才在这里填，填了就以它为准。</div></div>
     <div class="field"><label>SRS 播放服务地址（内部，HTTP-FLV/HLS，控制台会对其反代）</label>
       <input type="text" id="s-http" value="${esc(s.srs_http || '')}">
-      <div class="hint">默认 http://127.0.0.1:8080。预览与 HLS/FLV 都经控制台的 1986 端口转发，因此无需对外暴露 8080。</div></div>
+      <div class="hint">单容器部署默认 <code>http://127.0.0.1:8080</code>；.jet 双容器部署是 <code>http://srs:8080</code>（容器间地址）。预览与 HLS/FLV 都经控制台端口反代，因此无需对外暴露 8080。</div></div>
     <button class="btn primary" onclick="saveSettings()">保存设置</button>`;
 }
 

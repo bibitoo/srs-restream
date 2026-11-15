@@ -126,15 +126,20 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=25 -f lavfi -i sine=frequency
 
 ### 预览说明
 
-预览走 SRS 自带的 H5 播放器页（mpegts.js 播 HTTP-FLV）。控制台生成的链接形如：
+预览是**控制台弹窗里的原生 `<video>`**，用 mpegts.js（浏览器 MSE）直接播 HTTP-FLV，
+播的就是「复制 FLV 地址」里那个地址（形如 `http://<IP>:1986/live/camera01.flv?key=<密钥>`）。
 
-```
-http://<你的IP>:1986/players/srs_player.html?autostart=true&schema=http&app=live&stream=camera01.flv
-```
+- 播放库 `/vendor/mpegts.js`（Apache-2.0）随控制面一起内嵌进二进制，**点预览时才加载**，
+  不依赖外网 CDN，离线环境也能用；
+- 弹窗里有状态行：连上是 `已连接：video/x-flv … · 1920×1080`；8 秒还没画面会直接给出排查方向，
+  不用再对着黑屏猜；
+- 静音起播以符合浏览器自动播放策略，点播放器音量图标即可听声音；
+- 「新窗口打开」仍指向 SRS 自带的播放器页（`/players/srs_player.html`），排障时看它的报错最直观；
+- 混流输出 `mix/<任务ID>` 走同一个弹窗；录像的「手机播放」仍用 SRS 播放器页（HLS）。
 
-- 必须带 `autostart=true`，否则 SRS 播放器页只会显示一个空 URL 输入框（SRS 的默认行为）。
-- `stream` 必须带 `.flv` 后缀。
-- 页面会自动静音以符合浏览器自动播放策略，点开播放器音量即可听到声音。
+> 历史做法是把 SRS 自带的 `srs_player.html` **套进 iframe**：那个页面自带导航条、URL 输入框和
+> 「推荐播放器」列表，播放参数靠它自己的脚本解析，一旦没跑起来，弹窗里就只剩一堆页面文字
+> （看着像"一堆 HTML 代码"），完全看不到画面。1.5.2 起改成控制台自己播，不再依赖那个页面。
 
 ### 混流布局
 
@@ -158,7 +163,9 @@ http://<你的IP>:1986/players/srs_player.html?autostart=true&schema=http&app=li
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/health` | 健康检查 |
-| GET | `/api/overview` | 版本、在线流数、任务数、录像数 |
+| GET | `/api/discover` | **免密钥的最小发现**：只有 `service`/`name`/`version` 与 `auth_required`、`endpoints_path`、`auth_header`；**不含任何地址与口令** |
+| GET | `/api/endpoints` | **需密钥**：`rtmp_base`（含宿主端口）、`rtmp_port`、`ui`、`publish_key`、`endpoints[]`（`containerPort`/`hostPort`/`portSource`/`keyQuery`/`url`/`publishUrl`） |
+| GET | `/api/overview` | 版本、在线流数、任务数、录像数、`endpoints[]`（界面据此显示推流地址） |
 | GET | `/api/streams` | 流列表（含播放地址、分辨率、音频信息、**是否正在录制 `recording`**） |
 | GET | `/api/layouts` | 支持的混流布局 |
 
@@ -241,7 +248,7 @@ curl -X POST http://127.0.0.1:1986/api/jobs -H 'Content-Type: application/json' 
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/diag` | 推流/播放地址、在线流、录像健康、**最近 60 条访问日志**（含 Range、实际发送字节、UA、是否中断） |
+| GET | `/api/diag` | 推流/播放地址、**每个对外端点的容器内端口/宿主端口/端口来源**（`endpoints[].portSource`）、在线流、录像健康、**最近 60 条访问日志**（含 Range、实际发送字节、UA、是否中断） |
 
 访问日志同时落盘在 `/data/logs/access.log`。排查"播放只播一点""预览黑屏"时，先看这里：
 如果日志显示服务器已经把整个文件发给客户端（`sent` 接近文件大小），那就是客户端/浏览器的问题；
@@ -258,11 +265,26 @@ curl -X POST http://127.0.0.1:1986/api/jobs -H 'Content-Type: application/json' 
 SRS 的 `http_hooks` 会在推流上线/下线时回调 `/hooks/on_publish`、`/hooks/on_unpublish`，
 用于触发自动录制与自动转推；回调失败会被控制面兜底轮询补上。
 
+### 捷兔桌面契约
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/jetdesk/config` | 桌面推配置：`X-Access-Key` + **宿主端口回告**（`endpoints:[{name,service,protocol,containerPort,hostPort}]`，只放端口事实），幂等；GET 作健康探针 |
+
+口令头**只留一个**：`X-Access-Key`（`X-API-Key`/`X-JetDesk-Key`/`X-Auth-Token` 已删除，无过渡；
+`X-JetDesk-Agent-Token` 是协议规定的 MCP 身份头，保留）。
+`/jetdesk/config` 上的 `Authorization: Bearer <configToken>` 是**另一道门**（公开常量，只防误连），
+**绝不**拿来当访问密钥比对——否则公开常量会盖住用户口令。
+
+> 本服务不提供大模型能力，因此没有 `models` 段，也没有 `/jetdesk/models` 换密钥接口；
+> 需要模型能力的软件按协议 §6 实现。
+
 ## 目录与数据
 
 | 容器路径 | 说明 |
 | --- | --- |
 | `/data/config.json` | 推流目标、任务、设置的持久化配置 |
+| `/data/endpoints.json` | 桌面告知的宿主端口绑定（容器重建后到首次推送之间也能报对端口） |
 | `/data/recordings/` | 录像 `*.mp4` 与同名 `*.json` 元数据 |
 | `/data/logs/job-<id>.log` | 每个任务（编码器 + 各中继）的运行日志 |
 | `/data/assets/circle_mask.png` | 自动生成的圆窗口遮罩 |
@@ -345,27 +367,33 @@ curl -s -H 'Authorization: Bearer jetool' http://127.0.0.1:1986/api/agent-manife
 
 ```http
 POST /jetdesk/config
-X-API-Key: jetool              ← 当前生效密钥；首次就是 jetool
+X-Access-Key: jetool           ← 唯一口令头；轮换那一轮这里放旧口令
 Content-Type: application/json
 
-{"self":"jetstream","accessKey":"新密钥","instanceId":"d-xxx:jetsream"}
+{"self":"control","accessKey":"新密钥","instanceId":"d-xxx:jetsream"}
 → {"ok":true,"keyUpdated":true}
 ```
 
 接口**幂等**：同一份内容重复推送结果一致（桌面会每 2 秒重试）。
 
-#### 配置推送鉴权（规范 §5.1「两道门」）
+#### 配置推送鉴权（两道门，无过渡后门）
 
 第一道门是 `Authorization: Bearer <configToken>`（可选，**只防误连、不是密钥**，随 `.jet` 公开分发）。
-第二道门是当前生效密钥，满足**任一**即放行：
+第二道门是当前生效口令，**只有两个放行口**：
 
-| 顺序 | 条件 | 用途 |
-| --- | --- | --- |
-| 1 | 服务本身没配口令 | 无凭据可校 |
-| 2 | 生效口令仍是出厂默认 `jetool` | 首推 / 老客户端兼容（此时没有秘密可守） |
-| 3 | `X-API-Key` == 生效口令（也认 `X-JetDesk-Key` / `X-Access-Key` / Bearer / `?key=`） | 正规通道 |
-| 4 | 报文自证：body 的 `accessKey`/`access_key`/`key`/`token` 等于生效口令 | 老客户端「同口令重推」 |
-| 5 | `JETDESK_CONFIG_STRICT=0` | **仅排障**，默认关 |
+| # | 条件 |
+| --- | --- |
+| 1 | 服务本身没配口令（`access_key` 为空） |
+| 2 | `X-Access-Key` == 当前生效口令 |
+
+`JETDESK_CONFIG_STRICT=0` 是运维**排障开关**（默认关），不是兼容通道。
+
+**已删除、不再存在**（2026-11-15 起，无过渡期）：
+
+- 出厂弱口令 `jetool` 无条件放行；
+- 报文自证（body 里带 `accessKey`/`key` 就放行）；
+- `X-API-Key` / `X-JetDesk-Key` / `X-Auth-Token` 等旧口令头；
+- `Authorization` 等值于口令也放行（那是公开 configToken，不是口令）。
 
 > ⚠️ `configToken` **不是**永久放行凭据。用户改过口令后，桌面后续推送带的是**新口令**（规范要求）；
 > 把公开常量当后门，等于长期开放「改配置」的权限。
@@ -387,7 +415,7 @@ Content-Type: application/json
 | 入口 | 是否要密钥 |
 | --- | --- |
 | `/api/**`（除下列两个） | ✅ 要 |
-| `/api/health`、`/api/discover` | ⬜ 免（监控与 App 发现，只返回服务名/地址） |
+| `/api/health`、`/api/discover` | ⬜ 免（`discover` 只做最小发现：服务名/版本 + `auth_required` + `endpoints_path`，不含地址与口令） |
 | 预览反代 `/players/`、`*.flv`、`*.m3u8`、`*.ts` | ✅ 要 |
 | SRS 推流（RTMP 1935） | ✅ 要（控制面 `on_publish` 校验 `?key=`，不匹配直接拒绝） |
 | SRS 的 8080 / 1985 | ⬜ 不对外暴露（compose 里只 `expose`），外部一律经控制面反代 |
@@ -417,6 +445,30 @@ SRS 会因流名重复立即断开，界面上表现为**一直"重连中"**（f
 - 目标卡片上直接显示 ffmpeg 的真实报错（如"连接失败：127.0.0.1 在容器内指向容器自己…"）；
 - 新增推流地址时会提示不要用 `127.0.0.1`。
 
+## 端口 / 地址契约（宿主端口不写死）
+
+`.jet` 包里声明的是**容器内端口**，宿主端口由捷兔桌面分配 —— 本机端口被别的程序占用时，
+桌面会自动换号（例如 SRS 的 1935 → 1936）。因此包里**不写死任何宿主端口**，也不写死 `127.0.0.1`。
+
+- `jdconfig` 的 `endpoints[]` 声明对外端点（名字 / 协议 / 容器内端口 / 主入口 / 路径）：
+
+  ```json
+  "endpoints": [
+    {"name":"http","service":"control","protocol":"http","containerPort":1986,"primary":true,"path":"/"},
+    {"name":"rtmp","service":"srs","protocol":"rtmp","containerPort":1935,"path":"/live/","publishPath":"/live/stream"}
+  ]
+  ```
+
+- 桌面把分配到的宿主端口回告控制面（优先级从高到低）：
+  1. `POST /jetdesk/config` body 带 `{"endpoints":[{"name":"rtmp","hostPort":1936}]}`（推荐，每 2 秒重推，幂等）；
+  2. 环境变量 `JETDESK_PORT_1935=1936` 或 `JETDESK_ENDPOINT_RTMP_PORT=1936`；
+  3. 都没有 → 回退容器内端口，并在 `/api/diag` 标 `portSource=container-port`。
+- 对外地址一律用「请求方看到的 Host + 解析出的宿主端口」拼，`/api/endpoints` 与界面上的推流地址
+  都会跟着宿主端口变化，不再需要手动改「对外推流地址」；
+- 宿主端口绑定落盘在 `data/endpoints.json`，容器重建后到首次推送之间也能报对端口。
+
+完整契约与真机复现步骤见 [`docs/port-contract.md`](docs/port-contract.md)。
+
 ## 常见问题
 
 **预览是黑屏 / 看不到画面**
@@ -424,8 +476,10 @@ SRS 会因流名重复立即断开，界面上表现为**一直"重连中"**（f
 1. 先看「直播流」页该流的状态是否为「推流中」——没有推流自然是黑屏。
 2. 看「视频」列的编码：如果是 **H.265/HEVC**，浏览器 HTTP-FLV 基本播不了（弹窗里也会提示），
    请把推流端改回 H.264，或用 VLC/PotPlayer 打开弹窗里的 FLV 地址。
-3. 点弹窗里的「新窗口打开」，看播放器页里有什么报错（例如 404 说明流名/端口不对）。
-4. 确认控制台能访问到 SRS 播放服务：设置页里的「SRS 播放服务地址」默认 `http://127.0.0.1:8080`，
+3. 看弹窗里的状态行写了什么：`已连接：…` 说明流已经进来了（黑屏就是源本身没画面）；
+   写着「8 秒还没收到画面」通常是流名/端口不对或密钥无效。
+4. 仍看不出来时点弹窗里的「新窗口打开」，看 SRS 播放器页的具体报错（例如 404 说明流名/端口不对）。
+5. 确认控制台能访问到 SRS 播放服务：设置页里的「SRS 播放服务地址」默认 `http://127.0.0.1:8080`，
    在容器内应始终可访问；若你改过它，改回默认值。
 
 **录像"播放只能播一点点" / 拖不动进度条**
