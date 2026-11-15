@@ -578,7 +578,8 @@ func loopbackHint(targetURL, localAddr string) string {
 	if localAddr != "" && (host+":"+port) == localAddr {
 		msg += "（就是本容器的 SRS，流名相同会形成自环）"
 	}
-	msg += "；要推到宿主机上的服务，请改用宿主机 IP 或 host.docker.internal"
+	msg += "；要推到宿主机上的服务，请改用电脑的局域网 IP 或 host.docker.internal" +
+		"（Windows/macOS 的 Docker Desktop 都支持这个名字），端口也要填宿主端口而不是容器内端口"
 	return msg
 }
 
@@ -662,8 +663,10 @@ func (r *Runner) resolveSources(job Job) ([]StreamInfo, []string, error) {
 func (r *Runner) localMixURL(jobID string) string {
 	base := strings.TrimRight(r.store.Settings().RTMPBase, "/")
 	u := base + "/mix/" + jobID
-	// 推流鉴权：SRS 的 on_publish 会校验 ?key=，控制面自己推也要带
-	if k := r.store.AccessKey(); k != "" {
+	// 推流鉴权：SRS 的 on_publish 会校验 ?key=，控制面自己推也要带。
+	// 校验用的是 PublishKey（没单独配时回退 AccessKey），这里必须取同一个口令，
+	// 否则混流这一路会被自己的 on_publish 拒掉。
+	if k := r.store.PublishKey(); k != "" {
 		u += "?key=" + url.QueryEscape(k)
 	}
 	return u

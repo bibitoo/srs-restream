@@ -15,7 +15,7 @@ import (
 // 配置示例（Cursor → MCP）：
 //   { "mcpServers": { "jetstream": {
 //       "url": "http://192.168.1.10:1986/mcp",
-//       "headers": { "Authorization": "Bearer jetool" } } } }
+//       "headers": { "X-Access-Key": "jetool" } } } }
 //
 // 实现的是最小必要集合：initialize / notifications/initialized / tools/list / tools/call / ping。
 // 工具定义与 /api/agent/... 完全同源（见 agent.go），所以两处行为一致。

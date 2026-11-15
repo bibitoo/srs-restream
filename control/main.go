@@ -16,6 +16,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	// 内嵌时区库：容器镜像（如 jrottenberg/ffmpeg）常常没有 tzdata，
+	// 没有它 TZ=Asia/Shanghai 不生效，日志与时间戳会退回 UTC，排查问题时对不上点。
+	_ "time/tzdata"
 )
 
 //go:embed web
@@ -54,6 +57,21 @@ func main() {
 	rec := NewRecorder(mediaDir, ffmpegBin, ffprobeBin, st.RTMPBase)
 	rec.SetSegmentMinutes(st.RecordSegmentMinutes)
 
+	// 端口契约：包内声明「容器内端口」，宿主端口由桌面告知（推送或环境变量），
+	// 绑定的宿主端口落盘在 data/endpoints.json —— 容器重建后到首次推送之间也能报对端口。
+	eps := NewEndpointRegistry(filepath.Join(dataDir, "endpoints.json"))
+	for _, wmsg := range eps.Warnings() {
+		log.Printf("端点契约：%s", wmsg)
+	}
+	if d := eps.Declared(); len(d) > 0 {
+		parts := make([]string, 0, len(d))
+		for _, ep := range d {
+			parts = append(parts, fmt.Sprintf("%s=%d/%s", ep.Name, ep.ContainerPort, ep.Protocol))
+		}
+		log.Printf("端口契约：%s（声明的是容器内端口；宿主端口等桌面告知，未知时回退容器内端口）",
+			strings.Join(parts, " "))
+	}
+
 	var accessFile *ringLog
 	if f, err := os.OpenFile(filepath.Join(logsDir, "access.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
 		accessFile = newRingLog(1)
@@ -64,6 +82,7 @@ func main() {
 		srs:       srsClient,
 		runner:    runner,
 		rec:       rec,
+		eps:       eps,
 		mediaDir:  mediaDir,
 		token:     os.Getenv("AUTH_TOKEN"),
 		startedAt: time.Now(),
@@ -197,7 +216,11 @@ func (a *API) router(w http.ResponseWriter, r *http.Request) {
 	case "diag":
 		a.handleDiag(w, r)
 	case "discover":
+		// 免鉴权的最小发现（只有 service/name/version 等非敏感信息）
 		a.handleDiscover(w, r)
+	case "endpoints":
+		// 需要访问密钥：地址、推流口令都从这里取（走 /api/ 鉴权中间件）
+		a.handleEndpoints(w, r)
 	case "targets":
 		if rest == "" {
 			a.handleTargets(w, r)

@@ -26,7 +26,13 @@ fi
 
 log "架构=$ARCH  二进制=$(basename "$BIN")"
 log "SRS API   : ${SRS_API:-http://srs:1985}"
-log "推流对外  : ${PUBLIC_RTMP:-（未设置，界面按访问地址推断）}"
+if [ -n "${PUBLIC_RTMP:-}" ]; then
+  log "推流对外  : ${PUBLIC_RTMP}（由 PUBLIC_RTMP 显式指定）"
+else
+  # 不在这里猜宿主端口：桌面会通过 /jetdesk/config 或 JETDESK_PORT_1935 告知，
+  # 控制面按「请求 Host + 告知的宿主端口」拼对外地址。
+  log "推流对外  : 宿主端口由桌面分配（当前告知值：$([ -n "${JETDESK_PORT_1935:-}" ] && echo "${JETDESK_PORT_1935}" || echo 未知)）"
+fi
 log "监听      : ${LISTEN:-:1986}"
 
 # SRS 可能还在启动，控制面自身会重试，这里只等一小会儿让首屏数据更完整

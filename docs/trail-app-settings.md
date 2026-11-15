@@ -17,7 +17,7 @@
 | 来源 | 实现 | 凭证 | 缓存 |
 | --- | --- | --- | --- |
 | 📡 局域网 | `StreamServiceDiscovery` 扫 /24 网段的 `1986/api/discover`（24 并发、350ms 超时） | 无 | 24 小时 |
-| ☁️ 社区 | `CommunityAppsDiscovery` 调 `GET {社区}/vapi/agent/apps?applicationId=jetool-trail`，再反查每个后端的 `/api/discover` 补 RTMP 端口 | **A 仓**社区 JWT | 10 分钟 |
+| ☁️ 社区 | `CommunityAppsDiscovery` 调 `GET {社区}/vapi/agent/apps?applicationId=jetool-trail`，从记录里的 `accessKey` 取访问口令，再走两级探测（`/api/discover` 认身份 → `/api/endpoints` 换地址） | **A 仓**社区 JWT | 10 分钟 |
 | ✅ 历史 | `StreamUrlHistory`（原有，仅连接成功时记录） | 无 | 12 条/协议 |
 
 设置列表页副标题实时显示：`RTMP直播推流地址 ｜ 局域网 1 个 / 社区 1 个，点击选择`

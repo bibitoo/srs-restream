@@ -15,10 +15,12 @@ services:
         soft: 65535
         hard: 65535
     ports:
-      - "1935:1935"   # RTMP 推流 / 拉流
-      - "8080:8080"   # HTTP-FLV / HLS / 播放器页
-      - "1985:1985"   # SRS 原生 HTTP API
-      - "1986:1986"   # 控制台 + 业务 API
+      # 冒号左边是宿主端口，全可用环境变量覆盖（默认值即是历史行为）。
+      # 换成 .jet 交给捷兔桌面安装时，宿主端口由桌面分配，本文件不再假设。
+      - "${SRS_RTMP_PORT:-1935}:1935"   # RTMP 推流 / 拉流
+      - "${SRS_HTTP_PORT:-8080}:8080"   # HTTP-FLV / HLS / 播放器页
+      - "${SRS_API_PORT:-1985}:1985"    # SRS 原生 HTTP API
+      - "${UI_PORT:-1986}:1986"         # 控制台 + 业务 API
     environment:
       TZ: Asia/Shanghai
       DATA_DIR: /data

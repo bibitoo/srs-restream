@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -68,7 +69,12 @@ type Settings struct {
 	RecordSegmentMinutes int  `json:"record_segment_minutes"` // 单个录像分段时长，0 表示不分段
 	// AccessKey 是服务访问密钥：控制面所有 API、预览反代、SRS 推流都用它校验。
 	// 初始值 "jetool"，可由桌面通过 POST /jetdesk/config 推送覆盖。
-	AccessKey  string `json:"access_key"`
+	AccessKey string `json:"access_key"`
+	// PublishKey 只用于 RTMP 推流鉴权，和 AccessKey 分开是为了「能推流」不等于「能改配置」：
+	// 它会被 /api/discover（免鉴权、局域网可达）返回给 App 自动拼推流地址，
+	// 一旦泄露最多被人占一条流，不会丢控制面权限。
+	// 为空时回退 AccessKey，兼容没有这个字段的老部署。
+	PublishKey string `json:"publish_key"`
 	SRSAPI     string `json:"srs_api"`
 	SRSHTTP    string `json:"srs_http"`    // SRS 的 HTTP 服务地址（HTTP-FLV/HLS/播放器），控制面对其做反代
 	RTMPBase   string `json:"rtmp_base"`   // 容器内推流地址（SRS 监听）
@@ -95,6 +101,25 @@ func NewStore(path string) (*Store, error) {
 	if err := s.load(); err != nil {
 		return nil, err
 	}
+	// 首次启动（配置文件还不存在）时 load 会直接返回，走不到里面的回填分支，
+	// 这里统一兜底：没有推流口令就生成一个并落盘，别让它退化成 AccessKey。
+	if strings.TrimSpace(s.st.Settings.PublishKey) == "" {
+		s.st.Settings.PublishKey = newPublishKey()
+		if err := s.saveLocked(); err != nil {
+			return nil, err
+		}
+	}
+	// 启动断言：推流口令必须与控制台口令不同。
+	// 推流口令会被 /api/discover 公开给局域网（App 自动拼推流地址要用），
+	// 一旦等于 access_key，等于把控制台口令公开了 —— 这里直接重置推流口令，
+	// 比拒绝启动更合适（流媒体服务不该因为口令撞车就起不来），且不打日志口令值。
+	if s.st.Settings.PublishKey == s.st.Settings.AccessKey {
+		s.st.Settings.PublishKey = newPublishKey()
+		log.Printf("推流口令与控制台口令相同，已自动重置推流口令（口令值不打印）")
+		if err := s.saveLocked(); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
 }
 
@@ -102,7 +127,8 @@ func defaultSettings() Settings {
 	return Settings{
 		AutoRecord:           true,
 		RecordSegmentMinutes: 30,
-		AccessKey:            envOr("ACCESS_KEY", "jetool"),
+		AccessKey:            firstEnvOr("jetool", "JETDESK_ACCESS_KEY", "ACCESS_KEY"),
+		PublishKey:           envOr("PUBLISH_KEY", ""),
 		SRSAPI:               envOr("SRS_API", "http://127.0.0.1:1985"),
 		SRSHTTP:              envOr("SRS_HTTP_BASE", "http://127.0.0.1:8080"),
 		RTMPBase:             envOr("RTMP_BASE", "rtmp://127.0.0.1:1935/"),
@@ -186,6 +212,14 @@ func (s *Store) load() error {
 	if st.Settings.AccessKey == "" {
 		st.Settings.AccessKey = def.AccessKey
 	}
+	// 推流口令：老部署的 config.json 里没有这个字段 → 首次生成随机值并持久化。
+	// 不能拿 AccessKey 顶替：/api/discover 免鉴权，暴露出去的必须是「只能推流」的口令。
+	if strings.TrimSpace(st.Settings.PublishKey) == "" {
+		st.Settings.PublishKey = def.PublishKey
+	}
+	if strings.TrimSpace(st.Settings.PublishKey) == "" {
+		st.Settings.PublishKey = newPublishKey()
+	}
 	if v := os.Getenv("SRS_HTTP_BASE"); v != "" {
 		st.Settings.SRSHTTP = v
 	} else if st.Settings.SRSHTTP == "" {
@@ -244,11 +278,25 @@ func (s *Store) SetSettings(in Settings) error {
 	if in.AccessKey == "" {
 		in.AccessKey = s.st.Settings.AccessKey
 	}
+	// 控制台表单不带这个字段：沿用旧值，别把随机生成的推流口令冲成空。
+	if strings.TrimSpace(in.PublishKey) == "" {
+		in.PublishKey = s.st.Settings.PublishKey
+	}
 	if in.RTMPPublic == "" {
 		in.RTMPPublic = s.st.Settings.RTMPPublic
 	}
 	s.st.Settings = in
 	return s.saveLocked()
+}
+
+// newPublishKey 生成一个随机推流口令（16 字节 → 32 位 hex）。
+// 它会被 /api/discover 公开给局域网，因此必须和 AccessKey 不同。
+func newPublishKey() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "pub-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // SetAccessKey 覆盖访问密钥（桌面推送配置时调用）。
@@ -267,6 +315,17 @@ func (s *Store) SetAccessKey(key string) error {
 func (s *Store) AccessKey() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.st.Settings.AccessKey
+}
+
+// PublishKey 返回 RTMP 推流口令（/api/discover 会公开它）。
+// 没有单独配置时回退 AccessKey，保持老部署行为不变。
+func (s *Store) PublishKey() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if k := strings.TrimSpace(s.st.Settings.PublishKey); k != "" {
+		return k
+	}
 	return s.st.Settings.AccessKey
 }
 
@@ -436,6 +495,17 @@ func newID(prefix string) string {
 
 func nowStr() string {
 	return time.Now().Format("2006-01-02T15:04:05Z07:00")
+}
+
+// firstEnvOr 按顺序取第一个非空环境变量，都没有时用 def。
+// 用于「桌面注入的当前值 > 老的环境变量 > 出厂值」这种优先级。
+func firstEnvOr(def string, keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return def
 }
 
 func envOr(k, def string) string {

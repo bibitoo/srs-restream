@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +22,7 @@ type API struct {
 	srs       *SRSClient
 	runner    *Runner
 	rec       *Recorder
+	eps       *EndpointRegistry
 	mediaDir  string
 	token     string
 	startedAt time.Time
@@ -58,18 +58,21 @@ func (a *API) publicBase(r *http.Request) string {
 	return ""
 }
 
-// accessKeyOf 从请求里提取访问密钥，支持四种携带方式：
+// accessKeyOf 从请求里提取访问密钥。**不保留任何过渡别名**，口径只有下面这几个：
 //
-//	X-Access-Key: <key>
-//	Authorization: Bearer <key>
-//	?key=<key>            （推流 / <video> / 播放器页用）
-//	Cookie: jsk=<key>     （浏览器里登录一次，页面内所有请求自动带上）
+//	X-Access-Key: <key>            ← 唯一口令头（桌面 / App / 标准客户端都发这个）
+//	X-JetDesk-Agent-Token: <key>   ← MCP 身份头（协议规定的身份载体，可选）
+//	Authorization: Bearer <key>    ← 仅 /api/*（标准 API 客户端）；/jetdesk/config 上不是密钥，见 configAccessKeyOf
+//	?key=<key>                     ← 无头客户端（<video>/HLS/iframe/播放器页）
+//	Cookie: jsk=<key>              ← 浏览器登录一次后自动携带
+//
+// 已删除（不再识别）：X-API-Key、X-JetDesk-Key、X-Auth-Token —— 有发送方就改发送方，
+// 不再靠容器侧双读兜着。
 func accessKeyOf(r *http.Request) string {
-	if v := r.Header.Get("X-Access-Key"); v != "" {
-		return v
-	}
-	if v := r.Header.Get("X-Auth-Token"); v != "" {
-		return v
+	for _, h := range []string{"X-Access-Key", "X-JetDesk-Agent-Token"} {
+		if v := strings.TrimSpace(r.Header.Get(h)); v != "" {
+			return v
+		}
 	}
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
@@ -81,6 +84,32 @@ func accessKeyOf(r *http.Request) string {
 		return c.Value
 	}
 	return ""
+}
+
+// configAccessKeyOf 只从「访问密钥」头里取，**绝不看 Authorization / query / cookie**。
+//
+// 为什么单独一个函数：/jetdesk/config 上的 Authorization 是**公开的 configToken**
+// （随 .jet 分发，只防误连）。如果这里复用 accessKeyOf，桌面同时带
+// `Authorization: Bearer jetool`（configToken）和 `X-Access-Key: <真口令>` 时没问题，
+// 但只要顺序写错或少了头，就会拿 configToken 去比用户口令 —— 用户口令被公开常量盖住。
+// 只认 X-Access-Key：X-API-Key / X-JetDesk-Key 已删除，没有过渡期。
+func configAccessKeyOf(r *http.Request) string {
+	return strings.TrimSpace(r.Header.Get("X-Access-Key"))
+}
+
+// bearerTokenOf 取 Authorization: Bearer 的值（没有则为空）。
+func bearerTokenOf(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, "Bearer ") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+}
+
+// configTokenWant 返回当前生效的 configToken（防误连用，随包公开，不是口令）。
+// 与 jdconfig 的 models.services.<service>.configToken 保持一致，可用环境变量覆盖。
+func configTokenWant() string {
+	return envOr("JETDESK_CONFIG_TOKEN", "jetool")
 }
 
 // keyOK 校验访问密钥。密钥为空时视为不启用防护（兼容旧部署）。
@@ -144,6 +173,12 @@ func (a *API) handleOverview(w http.ResponseWriter, r *http.Request) {
 		"targets_total":     len(a.store.Targets()),
 		"settings":          a.store.Settings(),
 		"streams_error":     errStr(serr),
+		// 端口契约的解析结果（宿主端口由桌面分配），控制台据此展示推流地址，
+		// 不再靠前端猜端口。
+		"endpoints": WithPublishKey(a.eps.Resolve(r.Host), a.store.PublishKey()),
+		// publish_key 是推流专用口令（与 access_key 分开）：控制台用它拼推流提示，
+		// access_key 绝不能出现在 RTMP 地址里。
+		"publish_key": a.store.PublishKey(),
 	}
 	writeJSON(w, 200, out)
 }
@@ -197,31 +232,120 @@ func (a *API) handleStreams(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDiscover 供局域网内的客户端（如捷兔行迹 App）自动发现本服务。
-// 返回的地址用请求方看到的 Host 拼装，因此手机/PC 在局域网内都能直接拿到可用的推流地址。
+//
+// 地址一律用「请求方看到的 Host + 端点解析出的宿主端口」拼：
+// 请求 Host 给出局域网 IP，端点解析给出桌面实际分配的宿主端口，
+// 因此宿主端口冲突被改成 1936 时，这里返回的就是 1936，不是写死的 1935。
 func (a *API) handleDiscover(w http.ResponseWriter, r *http.Request) {
+	// 免鉴权接口，只放「够用且不敏感」的信息：
+	// 客户端用它确认「这是捷兔流媒体服务」，然后带口令去 /api/endpoints 取地址与推流口令。
+	//
+	// 为什么不能在这里放 rtmp_base / publish_key：
+	// 它对局域网完全开放，一旦返回推流口令，等于把「能推流」的权限公开 ——
+	// 任何人扫一遍网段就能往这台服务器推垃圾流；返回完整端点地址也会泄露内网拓扑。
+	writeJSON(w, 200, map[string]interface{}{
+		"service": "jetstream",
+		"name":    "捷兔流媒体服务",
+		"version": "1.0.0",
+		// auth_required：要拿地址/推流口令必须带访问密钥
+		"auth_required": true,
+		// 下一步该打的接口（相对路径，客户端用同一 host 拼）
+		"endpoints_path": "/api/endpoints",
+		// 口令头约定，省得客户端猜
+		"auth_header": "X-Access-Key",
+	})
+}
+
+// handleEndpoints 返回完整端点与推流口令（**需要访问密钥**，走 /api/ 鉴权中间件）。
+//
+// 原 /api/discover 的全部内容搬到这里：宿主端口、对外地址、推流口令、推流完整地址。
+func (a *API) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 	st := a.store.Settings()
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	// RTMP 对外端口：优先从「对外推流地址」里取，其次容器内地址，最后默认 1935
-	rtmpPort := "1935"
-	for _, cand := range []string{st.RTMPPublic, st.RTMPBase} {
-		if u, err := url.Parse(cand); err == nil && u.Port() != "" {
+	// publishUrl 拼上推流口令（access_key 绝不进 RTMP 地址）；
+	// url 保持干净，供只想要基址的客户端使用。
+	eps := WithPublishKey(a.eps.Resolve(r.Host), a.store.PublishKey())
+
+	// 推流基址：用户显式配置过「对外推流地址」就尊重它（老部署/手工指定），
+	// 否则用端点解析结果，绝不写死 127.0.0.1 或容器端口。
+	rtmpBase := strings.TrimSpace(st.RTMPPublic)
+	rtmpPort := ""
+	if rtmpBase != "" {
+		if u, err := url.Parse(rtmpBase); err == nil && u.Port() != "" {
 			rtmpPort = u.Port()
-			break
+		}
+		rtmpBase = ensureTrailingSlash(rtmpBase)
+	} else if ep, ok := findRTMPEndpoint(eps); ok {
+		rtmpBase = ep.URL
+		rtmpPort = strconv.Itoa(ep.HostPort)
+	}
+
+	ui, uiPort, uiSource := "", 0, ""
+	if ep, ok := primaryEndpoint(eps); ok {
+		ui, uiPort, uiSource = ep.URL, ep.HostPort, ep.PortSource
+	}
+
+	writeJSON(w, 200, map[string]interface{}{
+		"service": "jetstream",
+		"name":    "捷兔流媒体服务",
+		"version": "1.0.0",
+		// 兼容老客户端字段名：rtmp_base / rtmp_port / ui
+		"rtmp_base":   rtmpBase,
+		"rtmp_port":   rtmpPort,
+		"ui":          ui,
+		"ui_port":     uiPort,
+		"auto_record": st.AutoRecord,
+		// publish_key 让客户端拼出能通过 on_publish 鉴权的推流地址。
+		// 它是独立的推流口令（不是 access_key），泄露最多被占一条流；
+		// 但仍只发给**已通过访问密钥校验**的调用方。
+		"publish_key": a.store.PublishKey(),
+		// endpoints 是端口契约的完整形态：宿主端口、来源、推流完整地址都在这里
+		"endpoints": eps,
+		// 便于排障：主入口端口是从哪来的（desktop-push / request-host / container-port …）
+		"ui_port_source": uiSource,
+		"srs_version":    func() string { v, _ := a.srs.Version(); return v }(),
+	})
+}
+
+// findEndpoint 按名字取端点。
+func findEndpoint(eps []ResolvedEndpoint, name string) (ResolvedEndpoint, bool) {
+	for _, ep := range eps {
+		if ep.Name == name {
+			return ep, true
 		}
 	}
-	writeJSON(w, 200, map[string]interface{}{
-		"service":     "jetstream",
-		"name":        "捷兔流媒体服务",
-		"version":     "1.0.0",
-		"srs_version": func() string { v, _ := a.srs.Version(); return v }(),
-		"rtmp_base":   fmt.Sprintf("rtmp://%s:%s/live/", host, rtmpPort),
-		"rtmp_port":   rtmpPort,
-		"ui":          fmt.Sprintf("http://%s", r.Host),
-		"auto_record": st.AutoRecord,
-	})
+	return ResolvedEndpoint{}, false
+}
+
+// findRTMPEndpoint 优先取名为 rtmp 的端点，否则取第一个 rtmp/rtmps 协议的端点。
+// 端点是可自定义的，不能只认名字，否则换个名字就退回容器端口。
+func findRTMPEndpoint(eps []ResolvedEndpoint) (ResolvedEndpoint, bool) {
+	if ep, ok := findEndpoint(eps, "rtmp"); ok {
+		return ep, true
+	}
+	for _, ep := range eps {
+		if ep.Protocol == "rtmp" || ep.Protocol == "rtmps" {
+			return ep, true
+		}
+	}
+	return ResolvedEndpoint{}, false
+}
+
+// primaryEndpoint 取首页主入口端点。
+func primaryEndpoint(eps []ResolvedEndpoint) (ResolvedEndpoint, bool) {
+	for _, ep := range eps {
+		if ep.Primary {
+			return ep, true
+		}
+	}
+	return ResolvedEndpoint{}, false
+}
+
+// ensureTrailingSlash 给基址补尾部斜杠（rtmp://host:port 后要接 app 名）。
+func ensureTrailingSlash(s string) string {
+	if s == "" || strings.HasSuffix(s, "/") {
+		return s
+	}
+	return s + "/"
 }
 
 // handleDiag 汇总排障信息：地址是否正确、客户端到底请求了什么、录像文件是否可播。
@@ -238,6 +362,11 @@ func (a *API) handleDiag(w http.ResponseWriter, r *http.Request) {
 			"host":  r.Host,
 			"proto": "http",
 		},
+		// 端口契约：每个端点的容器内端口 / 宿主端口 / 端口来源 / 对外地址。
+		// 真机上「手机推到 1935、SRS 看不到流」这类问题，看这里的 hostPort 与 portSource 就能定位：
+		// portSource=container-port 说明桌面没把分配的宿主端口告诉我们。
+		"endpoints":         a.eps.Resolve(r.Host),
+		"endpoint_warnings": a.eps.Warnings(),
 	}
 	if v, err := a.srs.Version(); err == nil {
 		out["srs_version"] = v
@@ -766,54 +895,35 @@ func (a *API) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // ---------------- 捷兔桌面：配置接收端（协议 B 面） ----------------
 
-// factoryAccessKey 是出厂默认访问密钥（弱口令）。用户/桌面改过之后就不再是它。
-const factoryAccessKey = "jetool"
-
-// configPushAllowed 按规范（desktop-container.md §5.1「两道门」）判定配置推送是否放行。
+// configPushAllowed 判定配置推送是否放行。只有两个放行口，没有任何过渡后门：
 //
-// 第一道门是可选的 Bearer <configToken>（只防误连，不是密钥；本实现不强制）。
-// 第二道门是「当前生效的访问密钥」，满足以下任一条件即放行：
+//  1. 服务本身没配口令（effective == ""）—— 无凭据可校；
+//  2. X-Access-Key == 当前生效口令 —— 唯一正规通道。
 //
-//	1. 服务本身没配口令            —— 无凭据可校
-//	2. 生效口令仍是出厂默认弱口令  —— 首推 / 老客户端兼容（此时没有秘密可守）
-//	3. X-API-Key == 生效口令       —— 正规通道
-//	4. 报文自证：body 里出现生效口令 —— 老客户端「同口令重推」不必改代码
-//	5. JETDESK_CONFIG_STRICT=0     —— 仅排障用的显式放宽开关
+// 另有 JETDESK_CONFIG_STRICT=0，那是**排障开关**（默认关，运维显式打开），不是兼容通道。
 //
-// 注意：**不能**把 configToken 当作永久放行凭据——它随 .jet 公开分发，
-// 一旦用户改过口令，桌面后续推送带的是新口令（规范 §5.1 客户端要求），
-// 而不是 configToken。留后门等于让公开常量长期持有改配置的权限。
-func (a *API) configPushAllowed(r *http.Request, bodyKeys []string) (bool, string) {
+// 已删除（不再存在）：
+//   - 「生效口令仍是出厂 jetool 就放行」—— 出厂弱口令等于公开常量，不该持有改配置的权限；
+//   - 「报文自证：body 里出现生效口令」—— 鉴权只看头，不看报文内容；
+//   - 「Authorization 等值于口令也放行」—— 那个 Bearer 是公开 configToken，不是口令。
+//
+// Authorization: Bearer <configToken> 是另一码事（只防误连），在
+// handleJetDeskConfig 里单独校验，且**不能**替代这里的口令门。
+func (a *API) configPushAllowed(r *http.Request) (bool, string) {
 	effective := a.store.AccessKey()
 
-	// 条件 1：没配口令
+	// 放行口 1：没配口令
 	if effective == "" {
 		return true, "未配置口令"
 	}
-	// 条件 5：显式放宽（默认关，仅排障）
+	// 排障开关（默认关）：仅运维显式打开时放宽，用完必须关回
 	if v := strings.TrimSpace(os.Getenv("JETDESK_CONFIG_STRICT")); v == "0" || strings.EqualFold(v, "false") {
 		return true, "JETDESK_CONFIG_STRICT=0 放宽"
 	}
-	// 条件 2：生效口令仍是出厂默认弱口令（首推/老客户端兼容）
-	if effective == factoryAccessKey {
-		return true, "生效口令仍为出厂默认"
-	}
-	// 条件 3：请求头带当前生效口令（X-API-Key 为规范头，其余为兼容）
-	supplied := r.Header.Get("X-API-Key")
-	if supplied == "" {
-		supplied = r.Header.Get("X-JetDesk-Key")
-	}
-	if supplied == "" {
-		supplied = accessKeyOf(r)
-	}
-	if supplied != "" && supplied == effective {
-		return true, "X-API-Key 匹配"
-	}
-	// 条件 4：报文自证（body 里出现生效口令）
-	for _, k := range bodyKeys {
-		if k != "" && k == effective {
-			return true, "报文自证"
-		}
+	// 放行口 2：唯一正规通道 —— X-Access-Key 等于当前口令
+	// 这里**不能**用 accessKeyOf：它会识别 Authorization，而那是公开的 configToken。
+	if supplied := configAccessKeyOf(r); supplied != "" && supplied == effective {
+		return true, "X-Access-Key 匹配"
 	}
 	return false, ""
 }
@@ -845,24 +955,46 @@ func (a *API) handleJetDeskConfig(w http.ResponseWriter, r *http.Request) {
 		Models           map[string]interface{} `json:"models"`
 		CommunityBaseURL string                 `json:"communityBaseUrl"`
 		InstanceID       string                 `json:"instanceId"`
+		// 端口事实：endpoints 只放 name/service/protocol/containerPort/hostPort，
+		// 不放 url/path（容器用自己 jdconfig 的 path/publishPath/keyQuery 拼地址）。
+		// 宿主端口冲突时桌面会把 1935 改成 1936，必须第一时间告诉容器，
+		// 否则容器只能按容器内端口对外报地址，客户端就会推到被占用的端口上。
+		// self 是 compose 服务名 / 实例 key（不是 instanceId）；instanceId 单独给。
+		Endpoints []struct {
+			Name          string `json:"name"`
+			ContainerPort int    `json:"containerPort"`
+			HostPort      int    `json:"hostPort"`
+			Port          int    `json:"port"`
+			Host          string `json:"host"`
+		} `json:"endpoints"`
+		Ports map[string]json.Number `json:"ports"`
 	}
 	if err := readJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 
-	// 密钥字段名兼容：accessKey / access_key / key / token（桌面用哪个都行）
+	// 第一道门：Authorization: Bearer <configToken>（公开常量，只防「打错地址」）。
+	// 带了就必须等于 configToken —— 不认「等值于访问密钥」这种过渡写法。
+	// 注意：它**不是**访问密钥，不能替代下面第二道门。
+	if tok := bearerTokenOf(r); tok != "" && tok != configTokenWant() {
+		log.Printf("拒绝 /jetdesk/config：configToken 不匹配（来自 %s）", r.RemoteAddr)
+		writeErr(w, http.StatusUnauthorized, errors.New("访问密钥无效：配置令牌不匹配"))
+		return
+	}
+
+	// 第二道门：访问密钥 —— 只看 X-Access-Key，报文内容不参与鉴权。
 	bodyKeys := []string{
 		strings.TrimSpace(in.AccessKey),
 		strings.TrimSpace(in.AccessKeySnake),
 		strings.TrimSpace(in.Key),
 		strings.TrimSpace(in.Token),
 	}
-	if ok, why := a.configPushAllowed(r, bodyKeys); !ok {
+	if ok, why := a.configPushAllowed(r); !ok {
 		log.Printf("拒绝 /jetdesk/config：访问密钥无效（来自 %s）", r.RemoteAddr)
 		writeErr(w, http.StatusUnauthorized, errors.New("访问密钥无效"))
 		return
-	} else if why != "X-API-Key 匹配" {
+	} else if why != "X-Access-Key 匹配" {
 		log.Printf("放行 /jetdesk/config：%s（来自 %s）", why, r.RemoteAddr)
 	}
 
@@ -887,12 +1019,92 @@ func (a *API) handleJetDeskConfig(w http.ResponseWriter, r *http.Request) {
 		log.Printf("桌面配置：self=%s instanceId=%s community=%s models=%d 项",
 			in.Self, in.InstanceID, in.CommunityBaseURL, len(in.Models))
 	}
+
+	// 端口契约：把桌面分配的宿主端口记下来（每个端点优先用 endpoints[]，其次 ports 映射）。
+	ports, hosts := a.bindingFromPush(in.Endpoints, in.Ports)
+	if a.eps.SetAssigned(ports, hosts, nowStr()) {
+		log.Printf("宿主端口已由桌面告知：%v（此后对外地址按这些端口拼）", ports)
+	}
+
+	// 回报当前生效的端点：
+	//   endpoints —— 只含端口事实（name/service/protocol/containerPort/hostPort/portSource），
+	//                形状与推上来的请求一致，桌面可直接逐项比对（不一致＝契约没走通）；
+	//   resolved  —— 容器自己按 jdconfig 的 path/publishPath/keyQuery + 上面的 hostPort 拼出的地址，
+	//                仅供排查，桌面不必依赖它。
 	writeJSON(w, 200, map[string]interface{}{
 		"ok":         true,
 		"service":    "jetstream",
 		"keyUpdated": keyUpdated,
 		"self":       in.Self,
+		"instanceId": in.InstanceID,
+		"endpoints":  a.eps.ResolveFacts(r.Host),
+		"resolved":   a.eps.Resolve(r.Host),
 	})
+}
+
+// bindingFromPush 把推送内容翻译成「端点名 → 宿主端口」。
+// 兼容三种写法：
+//
+//	endpoints:[{name:"rtmp",hostPort:1936}]
+//	endpoints:[{containerPort:1935,hostPort:1936}]   （按容器内端口匹配声明表）
+//	ports:{"rtmp":1936} / ports:{"1935":1936}        （更省事的简写）
+func (a *API) bindingFromPush(items []struct {
+	Name          string `json:"name"`
+	ContainerPort int    `json:"containerPort"`
+	HostPort      int    `json:"hostPort"`
+	Port          int    `json:"port"`
+	Host          string `json:"host"`
+}, ports map[string]json.Number) (map[string]int, map[string]string) {
+	declared := a.eps.Declared()
+	nameOfContainerPort := func(p int) string {
+		for _, ep := range declared {
+			if ep.ContainerPort == p {
+				return ep.Name
+			}
+		}
+		return ""
+	}
+
+	out := map[string]int{}
+	hosts := map[string]string{}
+	// 先处理 ports 简写，再用 endpoints[] 覆盖：完整写法优先于简写
+	for k, v := range ports {
+		name := strings.ToLower(strings.TrimSpace(k))
+		if name == "" {
+			continue
+		}
+		if n, err := strconv.Atoi(name); err == nil {
+			name = nameOfContainerPort(n)
+		}
+		if name == "" {
+			continue
+		}
+		p, err := strconv.Atoi(v.String())
+		if err != nil || p <= 0 || p > 65535 {
+			continue
+		}
+		out[name] = p
+	}
+	for _, it := range items {
+		name := strings.ToLower(strings.TrimSpace(it.Name))
+		if name == "" && it.ContainerPort > 0 {
+			name = nameOfContainerPort(it.ContainerPort)
+		}
+		if name == "" {
+			continue
+		}
+		hp := it.HostPort
+		if hp <= 0 {
+			hp = it.Port
+		}
+		if hp > 0 && hp <= 65535 {
+			out[name] = hp
+		}
+		if h := strings.TrimSpace(it.Host); h != "" {
+			hosts[name] = h
+		}
+	}
+	return out, hosts
 }
 
 // ---------------- SRS 回调 ----------------
@@ -917,7 +1129,8 @@ func (a *API) handleHook(w http.ResponseWriter, r *http.Request, action string) 
 	// 推流鉴权：SRS 把推流 URL 的 query 放在 param 里（如 "?key=jetool"）。
 	// 密钥不匹配直接返回非 0，SRS 会拒绝这次推流。
 	if action == "on_publish" {
-		want := a.store.AccessKey()
+		// 推流口令优先用独立的 PublishKey（/api/discover 会公开它），没配时回退 AccessKey。
+		want := a.store.PublishKey()
 		if want != "" {
 			got := parseParamKey(in.Param)
 			if got != want {
