@@ -112,7 +112,6 @@ func agentTools() []*agentTool {
 				var in Job
 				b, _ := json.Marshal(args)
 				_ = json.Unmarshal(b, &in)
-				in.ExtraURLs = in.ExtraURLs
 				if v, ok := args["targets"].([]interface{}); ok {
 					for _, x := range v {
 						if s, ok := x.(string); ok && strings.TrimSpace(s) != "" {
